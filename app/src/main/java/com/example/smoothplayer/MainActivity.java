@@ -48,6 +48,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.Locale;
@@ -66,6 +67,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private static final String KEY_LAST_SPEED = "last_speed";
     private static final String KEY_LAST_FILL = "last_fill";
     private static final String KEY_PRIVACY_ACCEPTED = "privacy_accepted";
+    private static final String ROOT_CACHE_DIR = "root-cache";
+    private static final String ROOT_MOUNT_DIR = "root-mount";
     private static final String UPDATE_INFO_URL =
             "https://raw.githubusercontent.com/zhouhaoran-TJU/VibeReplay/main/dist/version.json";
     private static final String[] SPEED_LABELS = {"0.5x", "0.75x", "1x", "1.25x", "1.5x", "2x"};
@@ -142,6 +145,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         if (launchUri != null) {
             setPendingVideo(launchUri, 0, true);
             pathInput.setText(launchUri.toString());
+            saveLastPath(launchUri.toString());
             persistReadPermission(launchUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
         } else if (savedInstanceState != null) {
             String savedUri = savedInstanceState.getString(KEY_LAST_PATH, "");
@@ -196,6 +200,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         Uri uri = intent == null ? null : intent.getData();
         if (uri != null) {
             pathInput.setText(uri.toString());
+            saveLastPath(uri.toString());
             persistReadPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
             openVideo(uri, 0, true);
         }
@@ -358,7 +363,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         filesButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                requestAllFilesAccess();
+                showAccessOptions();
             }
         });
         LinearLayout.LayoutParams filesParams = new LinearLayout.LayoutParams(dp(72), dp(38));
@@ -584,7 +589,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         }
         new AlertDialog.Builder(this)
                 .setTitle("权限说明")
-                .setMessage("Smooth Player 会读取你选择的媒体或文件用于本地播放；会访问网络用于检查更新和下载更新包。未选择文件前不会主动读取媒体内容。")
+                .setMessage("Smooth Player 会读取你选择的媒体或文件用于本地播放；会访问网络用于检查更新和下载更新包；在你输入受限路径并确认打开时，可能通过 root/su 将文件挂载到本应用目录后播放，不额外复制大文件。")
                 .setPositiveButton("知道了", (dialog, which) ->
                         getPreferences().edit().putBoolean(KEY_PRIVACY_ACCEPTED, true).apply())
                 .show();
@@ -620,6 +625,55 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         }
     }
 
+    private void showAccessOptions() {
+        new AlertDialog.Builder(this)
+                .setTitle("文件访问")
+                .setItems(new CharSequence[]{"系统所有文件权限", "检测 root/su", "清理 root 挂载/缓存"},
+                        (dialog, which) -> {
+                            if (which == 0) {
+                                requestAllFilesAccess();
+                            } else if (which == 1) {
+                                checkRootAccess();
+                            } else {
+                                clearRootCache();
+                            }
+                        })
+                .show();
+    }
+
+    private void checkRootAccess() {
+        ioExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                boolean available = canRunSu();
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Toast.makeText(MainActivity.this,
+                                available ? "root/su 可用" : "root/su 不可用或未授权",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        });
+    }
+
+    private void clearRootCache() {
+        ioExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                unmountAndDeleteChildren(rootMountDir());
+                deleteChildren(rootCacheDir());
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Toast.makeText(MainActivity.this, "root 缓存已清理", Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        });
+    }
+
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
@@ -642,7 +696,15 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         } else {
             File file = new File(raw);
             if (!file.exists()) {
-                showFeedback("直接路径不可访问，请选择文件");
+                if (looksLikeRestrictedPath(raw)) {
+                    openRestrictedPathWithRoot(raw);
+                } else {
+                    showFeedback("直接路径不可访问，请选择文件");
+                }
+                return;
+            }
+            if (looksLikeRestrictedPath(raw)) {
+                openRestrictedPathWithRoot(raw);
                 return;
             }
             uri = Uri.fromFile(file);
@@ -721,7 +783,6 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                     }
                     applyPlaybackSpeed();
                     applyVideoTransform();
-                    saveLastPath(uri.toString());
                     updatePlayButton();
                     updateProgress();
                     revealControls();
@@ -759,8 +820,252 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             Log.w(TAG, "Failed to open video: " + uri, error);
             loading.setVisibility(View.GONE);
             releasePlayer();
-            showFeedback(error instanceof SecurityException ? "没有文件访问权限" : "打开失败");
+            if (isRestrictedFileUri(uri)) {
+                openRestrictedPathWithRoot(uri.getPath());
+            } else {
+                showFeedback(error instanceof SecurityException ? "没有文件访问权限" : "打开失败");
+            }
         }
+    }
+
+    private void openRestrictedPathWithRoot(String path) {
+        new AlertDialog.Builder(this)
+                .setTitle("尝试 root 访问")
+                .setMessage("系统限制普通应用直接访问此目录。可通过 root/su 将文件 bind mount 到本应用目录后播放，不占用额外视频空间。")
+                .setNegativeButton("取消", null)
+                .setNeutralButton("复制兜底", (dialog, which) -> copyRestrictedPathAndPlay(path))
+                .setPositiveButton("挂载播放", (dialog, which) -> mountRestrictedPathAndPlay(path))
+                .show();
+    }
+
+    private void mountRestrictedPathAndPlay(String path) {
+        ProgressDialog progressDialog = new ProgressDialog(this);
+        progressDialog.setMessage("正在通过 root 挂载文件");
+        progressDialog.setIndeterminate(true);
+        progressDialog.setCancelable(false);
+        progressDialog.show();
+        ioExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    File mountedFile = bindFileWithSu(path);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            progressDialog.dismiss();
+                            pathInput.setText(path);
+                            saveLastPath(path);
+                            openVideo(Uri.fromFile(mountedFile), 0, true);
+                        }
+                    });
+                } catch (IOException | InterruptedException exception) {
+                    Log.w(TAG, "Root bind mount failed: " + path, exception);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            progressDialog.dismiss();
+                            new AlertDialog.Builder(MainActivity.this)
+                                    .setTitle("挂载失败")
+                                    .setMessage("当前 root 环境可能没有把挂载传播到应用进程。可以尝试复制兜底，或使用支持 root 的文件管理器通过“打开方式”分享给本应用。")
+                                    .setNegativeButton("取消", null)
+                                    .setPositiveButton("复制兜底", (dialog, which) ->
+                                            copyRestrictedPathAndPlay(path))
+                                    .show();
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    private File bindFileWithSu(String sourcePath) throws IOException, InterruptedException {
+        File mountDir = rootMountDir();
+        if (!mountDir.exists() && !mountDir.mkdirs()) {
+            throw new IOException("Failed to create root mount dir: " + mountDir);
+        }
+        File target = new File(mountDir, System.currentTimeMillis() + "-" + safeFileName(sourcePath));
+        if (!target.createNewFile()) {
+            throw new IOException("Failed to create mount target: " + target);
+        }
+        String command = "mount --bind " + shellQuote(sourcePath) + " " + shellQuote(target.getAbsolutePath())
+                + " && chmod 644 " + shellQuote(target.getAbsolutePath());
+        runSuCommand(command);
+        if (!target.exists() || target.length() == 0) {
+            unmountWithSu(target);
+            throw new IOException("Mounted file is empty or invisible to app: " + target);
+        }
+        return target;
+    }
+
+    private void copyRestrictedPathAndPlay(String path) {
+        ProgressDialog progressDialog = new ProgressDialog(this);
+        progressDialog.setMessage("正在通过 root 复制文件");
+        progressDialog.setIndeterminate(true);
+        progressDialog.setCancelable(false);
+        progressDialog.show();
+        ioExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    File cachedFile = copyFileWithSu(path);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            progressDialog.dismiss();
+                            pathInput.setText(cachedFile.getAbsolutePath());
+                            saveLastPath(path);
+                            openVideo(Uri.fromFile(cachedFile), 0, true);
+                        }
+                    });
+                } catch (IOException | InterruptedException exception) {
+                    Log.w(TAG, "Root copy failed: " + path, exception);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            progressDialog.dismiss();
+                            Toast.makeText(MainActivity.this, "root 复制失败，请确认已授权 su", Toast.LENGTH_LONG).show();
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    private File copyFileWithSu(String sourcePath) throws IOException, InterruptedException {
+        File cacheDir = rootCacheDir();
+        if (!cacheDir.exists() && !cacheDir.mkdirs()) {
+            throw new IOException("Failed to create root cache dir: " + cacheDir);
+        }
+        File output = new File(cacheDir, System.currentTimeMillis() + "-" + safeFileName(sourcePath));
+        Process process = new ProcessBuilder("su", "-c", "cat " + shellQuote(sourcePath))
+                .redirectErrorStream(false)
+                .start();
+        try (InputStream inputStream = process.getInputStream();
+                OutputStream outputStream = new FileOutputStream(output)) {
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = inputStream.read(buffer)) >= 0) {
+                outputStream.write(buffer, 0, count);
+            }
+        }
+        int exitCode = process.waitFor();
+        if (exitCode != 0 || output.length() == 0) {
+            output.delete();
+            throw new IOException("su cat failed, exitCode=" + exitCode);
+        }
+        return output;
+    }
+
+    private void runSuCommand(String command) throws IOException, InterruptedException {
+        IOException lastError = null;
+        String[] suModes = {"-mm", "-c"};
+        for (String mode : suModes) {
+            Process process = null;
+            try {
+                if ("-mm".equals(mode)) {
+                    process = new ProcessBuilder("su", "-mm", "-c", command).start();
+                } else {
+                    process = new ProcessBuilder("su", "-c", command).start();
+                }
+                int exitCode = process.waitFor();
+                if (exitCode == 0) {
+                    return;
+                }
+                lastError = new IOException("su " + mode + " failed, exitCode=" + exitCode);
+            } catch (IOException exception) {
+                lastError = exception;
+            } finally {
+                if (process != null) {
+                    process.destroy();
+                }
+            }
+        }
+        throw lastError == null ? new IOException("su failed") : lastError;
+    }
+
+    private boolean canRunSu() {
+        Process process = null;
+        try {
+            process = new ProcessBuilder("su", "-c", "id").start();
+            return process.waitFor() == 0;
+        } catch (IOException | InterruptedException exception) {
+            if (exception instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            return false;
+        } finally {
+            if (process != null) {
+                process.destroy();
+            }
+        }
+    }
+
+    private File rootCacheDir() {
+        return new File(getExternalFilesDir(null), ROOT_CACHE_DIR);
+    }
+
+    private File rootMountDir() {
+        return new File(getExternalFilesDir(null), ROOT_MOUNT_DIR);
+    }
+
+    private void deleteChildren(File dir) {
+        File[] files = dir.listFiles();
+        if (files == null) {
+            return;
+        }
+        for (File file : files) {
+            if (file.isDirectory()) {
+                deleteChildren(file);
+            }
+            if (!file.delete()) {
+                Log.w(TAG, "Failed to delete cache file: " + file);
+            }
+        }
+    }
+
+    private void unmountAndDeleteChildren(File dir) {
+        File[] files = dir.listFiles();
+        if (files == null) {
+            return;
+        }
+        for (File file : files) {
+            unmountWithSu(file);
+            if (!file.delete()) {
+                Log.w(TAG, "Failed to delete mount file: " + file);
+            }
+        }
+    }
+
+    private void unmountWithSu(File file) {
+        try {
+            runSuCommand("umount " + shellQuote(file.getAbsolutePath()));
+        } catch (IOException | InterruptedException exception) {
+            Log.w(TAG, "Failed to unmount root file: " + file, exception);
+            if (exception instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    private String safeFileName(String sourcePath) {
+        String name = new File(sourcePath).getName();
+        if (name.trim().isEmpty()) {
+            return "restricted-video";
+        }
+        return name.replaceAll("[^A-Za-z0-9._-]", "_");
+    }
+
+    private boolean looksLikeRestrictedPath(String path) {
+        String normalized = path == null ? "" : path.toLowerCase(Locale.US);
+        return normalized.contains("/android/data/") || normalized.contains("/android/obb/");
+    }
+
+    private boolean isRestrictedFileUri(Uri uri) {
+        return uri != null && "file".equals(uri.getScheme()) && looksLikeRestrictedPath(uri.getPath());
+    }
+
+    private String shellQuote(String value) {
+        return "'" + value.replace("'", "'\\''") + "'";
     }
 
     private void togglePlay() {

@@ -1,6 +1,6 @@
 {
-  "versionCode": 3,
-  "versionName": "1.2-beta",
+  "versionCode": 4,
+  "versionName": "1.3-beta",
   "apkUrl": "https://github.com/zhouhaoran-TJU/VibeReplay/raw/main/dist/SmoothPlayer-beta.apk",
-  "notes": "文件选择器改为可浏览所有可打开文件，并新增所有文件访问权限入口，方便访问更多本地目录。"
+  "notes": "新增 root/su 受限路径访问：优先 bind mount 到本应用目录播放，不复制大视频；挂载失败时可选择复制兜底。"
 }
