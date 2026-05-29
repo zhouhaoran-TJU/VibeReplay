@@ -15,7 +15,7 @@
 - 保存最近播放的视频、进度、倍速和画面模式，Surface 重建后自动恢复
 - 应用内检查更新、下载 APK 并跳转系统安装器
 - 顶部“权限”入口可跳转 Android 11+ 的所有文件访问权限设置，方便直接路径访问更多本地目录
-- 对 `/Android/data/`、`/Android/obb/` 等受限路径，支持 root/su bind mount 到本应用目录播放，避免复制大视频；挂载失败时可手动选择复制兜底
+- 对 `/Android/data/`、`/Android/obb/` 等受限路径，支持 Shizuku UserService 直接打开原文件 fd 播放，避免复制大视频；root/su bind mount 保留为兜底
 - 深色沉浸式界面，保持屏幕常亮
 
 ## 构建

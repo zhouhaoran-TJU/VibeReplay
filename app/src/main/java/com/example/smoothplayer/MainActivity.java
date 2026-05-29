@@ -4,8 +4,10 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.ProgressDialog;
+import android.content.ComponentName;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
@@ -16,10 +18,13 @@ import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.media.PlaybackParams;
 import android.net.Uri;
+import android.os.IBinder;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.ParcelFileDescriptor;
+import android.os.RemoteException;
 import android.provider.Settings;
 import android.text.InputType;
 import android.util.Log;
@@ -43,6 +48,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONObject;
+
+import rikka.shizuku.Shizuku;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -69,6 +76,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private static final String KEY_PRIVACY_ACCEPTED = "privacy_accepted";
     private static final String ROOT_CACHE_DIR = "root-cache";
     private static final String ROOT_MOUNT_DIR = "root-mount";
+    private static final int REQUEST_SHIZUKU_PERMISSION = 1003;
     private static final String UPDATE_INFO_URL =
             "https://raw.githubusercontent.com/zhouhaoran-TJU/VibeReplay/main/dist/version.json";
     private static final String[] SPEED_LABELS = {"0.5x", "0.75x", "1x", "1.25x", "1.5x", "2x"};
@@ -96,6 +104,42 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             setControlsVisible(false);
         }
     };
+    private final Shizuku.UserServiceArgs shizukuServiceArgs =
+            new Shizuku.UserServiceArgs(new ComponentName(
+                    BuildConfig.APPLICATION_ID,
+                    RestrictedFileService.class.getName()))
+                    .daemon(false)
+                    .processNameSuffix("restricted_file")
+                    .debuggable(BuildConfig.DEBUG)
+                    .version(1);
+    private final ServiceConnection shizukuConnection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            restrictedFileService = IRestrictedFileService.Stub.asInterface(service);
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            restrictedFileService = null;
+        }
+    };
+    private final Shizuku.OnRequestPermissionResultListener shizukuPermissionListener =
+            new Shizuku.OnRequestPermissionResultListener() {
+                @Override
+                public void onRequestPermissionResult(int requestCode, int grantResult) {
+                    if (requestCode != REQUEST_SHIZUKU_PERMISSION) {
+                        return;
+                    }
+                    if (grantResult == PackageManager.PERMISSION_GRANTED && pendingShizukuPath != null) {
+                        String path = pendingShizukuPath;
+                        pendingShizukuPath = null;
+                        openRestrictedPathWithShizuku(path);
+                    } else {
+                        pendingShizukuPath = null;
+                        Toast.makeText(MainActivity.this, "Shizuku 未授权", Toast.LENGTH_SHORT).show();
+                    }
+                }
+            };
 
     private FrameLayout root;
     private TextureView textureView;
@@ -131,6 +175,9 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private float playbackSpeed = 1f;
     private long lastTapTime;
     private float lastTapX;
+    private IRestrictedFileService restrictedFileService;
+    private ParcelFileDescriptor activeShizukuFd;
+    private String pendingShizukuPath;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -138,6 +185,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         configureWindow();
         restoreUiState(savedInstanceState);
         buildLayout();
+        Shizuku.addRequestPermissionResultListener(shizukuPermissionListener, handler);
         showPrivacyNoticeIfNeeded();
         requestStoragePermissionIfNeeded();
 
@@ -217,6 +265,9 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             surface.release();
             surface = null;
         }
+        closeActiveShizukuFd();
+        unbindShizukuService();
+        Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener);
         ioExecutor.shutdownNow();
         super.onDestroy();
     }
@@ -628,11 +679,13 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private void showAccessOptions() {
         new AlertDialog.Builder(this)
                 .setTitle("文件访问")
-                .setItems(new CharSequence[]{"系统所有文件权限", "检测 root/su", "清理 root 挂载/缓存"},
+                .setItems(new CharSequence[]{"系统所有文件权限", "检测 Shizuku", "检测 root/su", "清理 root 挂载/缓存"},
                         (dialog, which) -> {
                             if (which == 0) {
                                 requestAllFilesAccess();
                             } else if (which == 1) {
+                                checkShizukuAccess();
+                            } else if (which == 2) {
                                 checkRootAccess();
                             } else {
                                 clearRootCache();
@@ -680,6 +733,14 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         if (requestCode == REQUEST_READ_STORAGE && grantResults.length > 0
                 && grantResults[0] != PackageManager.PERMISSION_GRANTED) {
             Toast.makeText(this, "可通过系统选择文件继续播放视频", Toast.LENGTH_LONG).show();
+        } else if (requestCode == REQUEST_SHIZUKU_PERMISSION) {
+            if (isShizukuGranted() && pendingShizukuPath != null) {
+                String path = pendingShizukuPath;
+                pendingShizukuPath = null;
+                openRestrictedPathWithShizuku(path);
+            } else {
+                Toast.makeText(this, "Shizuku 未授权", Toast.LENGTH_SHORT).show();
+            }
         }
     }
 
@@ -766,7 +827,15 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         try {
             player.setAudioStreamType(AudioManager.STREAM_MUSIC);
             player.setSurface(surface);
-            player.setDataSource(this, uri);
+            if ("shizuku".equals(uri.getScheme())) {
+                String path = uri.getSchemeSpecificPart();
+                ParcelFileDescriptor descriptor = openFileDescriptorWithShizuku(path);
+                closeActiveShizukuFd();
+                activeShizukuFd = descriptor;
+                player.setDataSource(descriptor.getFileDescriptor());
+            } else {
+                player.setDataSource(this, uri);
+            }
             player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
                 @Override
                 public void onPrepared(MediaPlayer mediaPlayer) {
@@ -816,26 +885,158 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 }
             });
             player.prepareAsync();
-        } catch (IOException | IllegalArgumentException | SecurityException error) {
+        } catch (IOException | IllegalArgumentException | SecurityException | RemoteException
+                | InterruptedException error) {
+            if (error instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             Log.w(TAG, "Failed to open video: " + uri, error);
             loading.setVisibility(View.GONE);
             releasePlayer();
             if (isRestrictedFileUri(uri)) {
-                openRestrictedPathWithRoot(uri.getPath());
+                openRestrictedPathOptions(uri.getPath());
             } else {
                 showFeedback(error instanceof SecurityException ? "没有文件访问权限" : "打开失败");
             }
         }
     }
 
+    private void openRestrictedPathOptions(String path) {
+        new AlertDialog.Builder(this)
+                .setTitle("访问受限路径")
+                .setMessage("推荐使用 Shizuku：由 Shizuku 服务打开原文件 fd 后直接播放，不复制大文件。root 挂载作为兜底。")
+                .setNegativeButton("取消", null)
+                .setNeutralButton("root 选项", (dialog, which) -> openRestrictedPathWithRoot(path))
+                .setPositiveButton("Shizuku 播放", (dialog, which) -> openRestrictedPathWithShizuku(path))
+                .show();
+    }
+
     private void openRestrictedPathWithRoot(String path) {
         new AlertDialog.Builder(this)
-                .setTitle("尝试 root 访问")
-                .setMessage("系统限制普通应用直接访问此目录。可通过 root/su 将文件 bind mount 到本应用目录后播放，不占用额外视频空间。")
+                .setTitle("root 访问")
+                .setMessage("通过 root/su 将文件 bind mount 到本应用目录后播放，不占用额外视频空间。")
                 .setNegativeButton("取消", null)
                 .setNeutralButton("复制兜底", (dialog, which) -> copyRestrictedPathAndPlay(path))
                 .setPositiveButton("挂载播放", (dialog, which) -> mountRestrictedPathAndPlay(path))
                 .show();
+    }
+
+    private void openRestrictedPathWithShizuku(String path) {
+        if (!isShizukuAvailable()) {
+            Toast.makeText(this, "请先安装并启动 Shizuku", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (!isShizukuGranted()) {
+            pendingShizukuPath = path;
+            Shizuku.requestPermission(REQUEST_SHIZUKU_PERMISSION);
+            return;
+        }
+        ProgressDialog progressDialog = new ProgressDialog(this);
+        progressDialog.setMessage("正在通过 Shizuku 打开文件");
+        progressDialog.setIndeterminate(true);
+        progressDialog.setCancelable(false);
+        progressDialog.show();
+        ioExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    ensureShizukuServiceBound();
+                    openFileDescriptorWithShizuku(path).close();
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            progressDialog.dismiss();
+                            pathInput.setText(path);
+                            saveLastPath(path);
+                            openVideo(Uri.fromParts("shizuku", path, null), 0, true);
+                        }
+                    });
+                } catch (IOException | RemoteException | InterruptedException exception) {
+                    Log.w(TAG, "Shizuku open failed: " + path, exception);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            progressDialog.dismiss();
+                            new AlertDialog.Builder(MainActivity.this)
+                                    .setTitle("Shizuku 打开失败")
+                                    .setMessage("请确认 Shizuku 正在运行且已授权本应用。也可以尝试 root 挂载方式。")
+                                    .setNegativeButton("取消", null)
+                                    .setPositiveButton("root 选项", (dialog, which) ->
+                                            openRestrictedPathWithRoot(path))
+                                    .show();
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    private ParcelFileDescriptor openFileDescriptorWithShizuku(String path)
+            throws IOException, RemoteException, InterruptedException {
+        ensureShizukuServiceBound();
+        IRestrictedFileService service = restrictedFileService;
+        if (service == null) {
+            throw new IOException("Shizuku service is not connected");
+        }
+        ParcelFileDescriptor descriptor = service.openFile(path);
+        if (descriptor == null) {
+            throw new IOException("Shizuku returned null fd");
+        }
+        return descriptor;
+    }
+
+    private void ensureShizukuServiceBound() throws IOException, InterruptedException {
+        if (restrictedFileService != null) {
+            return;
+        }
+        if (!isShizukuAvailable()) {
+            throw new IOException("Shizuku is not available");
+        }
+        Shizuku.bindUserService(shizukuServiceArgs, shizukuConnection);
+        long deadline = System.currentTimeMillis() + 5000L;
+        while (restrictedFileService == null && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50L);
+        }
+        if (restrictedFileService == null) {
+            throw new IOException("Timed out binding Shizuku service");
+        }
+    }
+
+    private void unbindShizukuService() {
+        try {
+            Shizuku.unbindUserService(shizukuServiceArgs, shizukuConnection, true);
+        } catch (RuntimeException exception) {
+            Log.w(TAG, "Failed to unbind Shizuku service", exception);
+        }
+        restrictedFileService = null;
+    }
+
+    private boolean isShizukuAvailable() {
+        try {
+            return Shizuku.pingBinder();
+        } catch (RuntimeException exception) {
+            return false;
+        }
+    }
+
+    private boolean isShizukuGranted() {
+        try {
+            return Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED;
+        } catch (RuntimeException exception) {
+            return false;
+        }
+    }
+
+    private void checkShizukuAccess() {
+        if (!isShizukuAvailable()) {
+            Toast.makeText(this, "Shizuku 未运行", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!isShizukuGranted()) {
+            Shizuku.requestPermission(REQUEST_SHIZUKU_PERMISSION);
+            return;
+        }
+        Toast.makeText(this, "Shizuku 已授权", Toast.LENGTH_SHORT).show();
     }
 
     private void mountRestrictedPathAndPlay(String path) {
@@ -1367,7 +1568,20 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             player.release();
             player = null;
         }
+        closeActiveShizukuFd();
         prepared = false;
+    }
+
+    private void closeActiveShizukuFd() {
+        if (activeShizukuFd == null) {
+            return;
+        }
+        try {
+            activeShizukuFd.close();
+        } catch (IOException exception) {
+            Log.w(TAG, "Failed to close Shizuku fd", exception);
+        }
+        activeShizukuFd = null;
     }
 
     private void savePlaybackState() {
