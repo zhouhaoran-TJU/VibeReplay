@@ -1,0 +1,8 @@
+<resources>
+    <color name="player_black">#05070A</color>
+    <color name="panel_glass">#CC101820</color>
+    <color name="panel_edge">#33FFFFFF</color>
+    <color name="accent_cyan">#56D7FF</color>
+    <color name="text_primary">#F6F8FB</color>
+    <color name="text_secondary">#AEB7C2</color>
+</resources>

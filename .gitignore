@@ -1,0 +1,13 @@
+.gradle/
+.gradle-home/
+.build-env/
+.codex/
+.agents/
+build/
+app/build/
+local.properties
+release-signing.properties
+*.keystore
+*.jks
+*.iml
+.idea/
