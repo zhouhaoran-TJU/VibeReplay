@@ -70,6 +70,13 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             "https://raw.githubusercontent.com/zhouhaoran-TJU/VibeReplay/main/dist/version.json";
     private static final String[] SPEED_LABELS = {"0.5x", "0.75x", "1x", "1.25x", "1.5x", "2x"};
     private static final float[] SPEED_VALUES = {0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f};
+    private static final String[] PICKER_MIME_TYPES = {
+            "video/*",
+            "audio/*",
+            "application/octet-stream",
+            "application/*",
+            "text/*"
+    };
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
@@ -347,6 +354,16 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         LinearLayout.LayoutParams updateParams = new LinearLayout.LayoutParams(dp(72), dp(38));
         updateParams.leftMargin = dp(8);
         titleRow.addView(updateButton, updateParams);
+        Button filesButton = makeButton("权限");
+        filesButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                requestAllFilesAccess();
+            }
+        });
+        LinearLayout.LayoutParams filesParams = new LinearLayout.LayoutParams(dp(72), dp(38));
+        filesParams.leftMargin = dp(8);
+        titleRow.addView(filesButton, filesParams);
         topBar.addView(titleRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -567,7 +584,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         }
         new AlertDialog.Builder(this)
                 .setTitle("权限说明")
-                .setMessage("Smooth Player 会读取你选择的视频用于本地播放；会访问网络用于检查更新和下载更新包。未选择文件前不会主动读取媒体内容。")
+                .setMessage("Smooth Player 会读取你选择的媒体或文件用于本地播放；会访问网络用于检查更新和下载更新包。未选择文件前不会主动读取媒体内容。")
                 .setPositiveButton("知道了", (dialog, which) ->
                         getPreferences().edit().putBoolean(KEY_PRIVACY_ACCEPTED, true).apply())
                 .show();
@@ -581,6 +598,25 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Build.VERSION.SDK_INT <= 28
                 && checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, REQUEST_READ_STORAGE);
+        }
+    }
+
+    private void requestAllFilesAccess() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            requestStoragePermissionIfNeeded();
+            Toast.makeText(this, "已请求存储读取权限", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (android.os.Environment.isExternalStorageManager()) {
+            Toast.makeText(this, "已拥有所有文件访问权限", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:" + getPackageName()));
+        try {
+            startActivity(intent);
+        } catch (ActivityNotFoundException exception) {
+            startActivity(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
         }
     }
 
@@ -618,7 +654,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private void pickVideo() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("video/*");
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, PICKER_MIME_TYPES);
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         try {
             startActivityForResult(intent, REQUEST_PICK_VIDEO);
