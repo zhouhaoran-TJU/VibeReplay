@@ -868,6 +868,9 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         root.addView(shizukuBrowserOverlay, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            shizukuBrowserOverlay.setElevation(dp(24));
+        }
     }
 
     private void bindGestures() {
@@ -1551,8 +1554,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         browserVisible = true;
         if (shizukuBrowserOverlay != null) {
             shizukuBrowserOverlay.setVisibility(View.VISIBLE);
+            shizukuBrowserOverlay.bringToFront();
         }
         setControlsVisible(false);
+        updatePlayButton();
         hideSystemBars();
     }
 
@@ -2418,6 +2423,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         boolean playing = player != null && prepared && player.isPlaying();
         playButton.setText(playing ? "⏸" : "▶");
         centerPlayButton.setText(playing ? "⏸" : "▶");
+        if (browserVisible) {
+            centerPlayButton.setVisibility(View.GONE);
+            return;
+        }
         centerPlayButton.setVisibility((controlsVisible || !playing) ? View.VISIBLE : View.GONE);
     }
 
