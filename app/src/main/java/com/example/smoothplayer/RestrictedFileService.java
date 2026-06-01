@@ -50,6 +50,15 @@ public final class RestrictedFileService extends IRestrictedFileService.Stub {
         return entries.toArray(new String[0]);
     }
 
+    @Override
+    public boolean deleteFile(String path) throws RemoteException {
+        File file = new File(path);
+        if (!file.exists() || file.isDirectory()) {
+            return false;
+        }
+        return file.delete();
+    }
+
     public void destroy() {
         Log.i(TAG, "Shizuku user service destroyed");
     }

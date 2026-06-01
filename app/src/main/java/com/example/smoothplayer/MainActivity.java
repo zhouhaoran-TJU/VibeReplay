@@ -82,6 +82,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private static final long CONTROLS_HIDE_DELAY_MS = 3200L;
     private static final int SEEK_STEP_MS = 10_000;
     private static final int SEEK_TRIPLE_STEP_MS = 60_000;
+    private static final int SWIPE_SWITCH_MIN_DISTANCE_DP = 96;
+    private static final int SWIPE_SWITCH_MAX_DURATION_MS = 800;
     private static final String PREFS = "smooth_player";
     private static final String KEY_LAST_PATH = "last_path";
     private static final String KEY_LAST_POSITION = "last_position";
@@ -145,7 +147,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                     .daemon(false)
                     .processNameSuffix("restricted_file")
                     .debuggable(BuildConfig.DEBUG)
-                    .version(1);
+                    .version(2);
     private final ServiceConnection shizukuConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
@@ -215,12 +217,18 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private float speedBeforeLongPress = 1f;
     private long lastTapTime;
     private float lastTapX;
+    private float touchDownX;
+    private float touchDownY;
+    private long touchDownTime;
+    private boolean touchMoved;
     private boolean longPressActive;
     private boolean longPressTriggered;
     private int tapCount;
     private IRestrictedFileService restrictedFileService;
     private ParcelFileDescriptor activeShizukuFd;
     private String pendingShizukuPath;
+    private final List<PlaybackItem> playbackQueue = new ArrayList<>();
+    private int currentQueueIndex = -1;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -367,6 +375,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 persistReadPermission(uri, data.getFlags());
                 pathInput.setText(uri.toString());
                 saveLastPath(uri.toString());
+                clearPlaybackQueue();
                 openVideo(uri, 0, true);
             }
         }
@@ -463,6 +472,16 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         LinearLayout.LayoutParams updateParams = new LinearLayout.LayoutParams(dp(64), dp(36));
         updateParams.leftMargin = dp(8);
         titleRow.addView(updateButton, updateParams);
+        Button deleteButton = makeButton("删除");
+        deleteButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                confirmDeleteCurrentFile();
+            }
+        });
+        LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(dp(64), dp(36));
+        deleteParams.leftMargin = dp(8);
+        titleRow.addView(deleteButton, deleteParams);
         Button filesButton = makeButton("权限");
         filesButton.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -678,10 +697,19 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 }
                 switch (event.getAction()) {
                     case MotionEvent.ACTION_DOWN:
+                        touchDownX = event.getX();
+                        touchDownY = event.getY();
+                        touchDownTime = System.currentTimeMillis();
+                        touchMoved = false;
                         longPressTriggered = false;
                         handler.postDelayed(longPressRunnable, LONG_PRESS_DELAY_MS);
                         return true;
                     case MotionEvent.ACTION_MOVE:
+                        if (Math.abs(event.getX() - touchDownX) > dp(16)
+                                || Math.abs(event.getY() - touchDownY) > dp(16)) {
+                            touchMoved = true;
+                            handler.removeCallbacks(longPressRunnable);
+                        }
                         return true;
                     case MotionEvent.ACTION_CANCEL:
                         handler.removeCallbacks(longPressRunnable);
@@ -692,6 +720,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                         handler.removeCallbacks(longPressRunnable);
                         if (longPressTriggered) {
                             stopLongPressSpeed();
+                            return true;
+                        }
+                        if (handlePlaybackSwipe(event)) {
+                            tapCount = 0;
+                            handler.removeCallbacks(singleTapRunnable);
                             return true;
                         }
                         long now = System.currentTimeMillis();
@@ -731,6 +764,21 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         return isPointInside(topBar, event.getX(), event.getY())
                 || isPointInside(bottomBar, event.getX(), event.getY())
                 || isPointInside(centerPlayButton, event.getX(), event.getY());
+    }
+
+    private boolean handlePlaybackSwipe(MotionEvent event) {
+        if (!touchMoved || root == null) {
+            return false;
+        }
+        float deltaX = event.getX() - touchDownX;
+        float deltaY = event.getY() - touchDownY;
+        long duration = System.currentTimeMillis() - touchDownTime;
+        if (duration > SWIPE_SWITCH_MAX_DURATION_MS
+                || Math.abs(deltaX) < dp(SWIPE_SWITCH_MIN_DISTANCE_DP)
+                || Math.abs(deltaX) < Math.abs(deltaY) * 1.6f) {
+            return false;
+        }
+        return switchPlaybackItem(deltaX < 0 ? 1 : -1);
     }
 
     private boolean isPointInside(View target, float x, float y) {
@@ -867,6 +915,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             showFeedback("请输入路径或选择文件");
             return;
         }
+        clearPlaybackQueue();
 
         Uri uri;
         if (raw.startsWith("content://") || raw.startsWith("file://")) {
@@ -886,6 +935,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 return;
             }
             uri = Uri.fromFile(file);
+            setLocalPlaybackQueue(file);
         }
         saveLastPath(raw);
         openVideo(uri, 0, true);
@@ -912,7 +962,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
         intent.putExtra(Intent.EXTRA_MIME_TYPES, PICKER_MIME_TYPES);
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         try {
             startActivityForResult(intent, REQUEST_PICK_VIDEO);
         } catch (ActivityNotFoundException exception) {
@@ -928,6 +979,13 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
         } catch (SecurityException exception) {
             Log.w(TAG, "Provider did not grant persistable read permission: " + uri, exception);
+        }
+        if ((flags & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) != 0) {
+            try {
+                getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            } catch (SecurityException exception) {
+                Log.w(TAG, "Provider did not grant persistable write permission: " + uri, exception);
+            }
         }
     }
 
@@ -1031,6 +1089,97 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             } else {
                 showFeedback(error instanceof SecurityException ? "没有文件访问权限" : "打开失败");
             }
+        }
+    }
+
+    private void openPlaybackItem(PlaybackItem item, boolean autoPlay) {
+        if (item == null) {
+            return;
+        }
+        pathInput.setText(item.path);
+        saveLastPath(item.path);
+        if (item.shizuku) {
+            openVideo(Uri.fromParts("shizuku", item.path, null), 0, autoPlay);
+        } else {
+            openVideo(Uri.fromFile(new File(item.path)), 0, autoPlay);
+        }
+    }
+
+    private void setPlaybackQueue(List<PlaybackItem> items, String selectedPath) {
+        playbackQueue.clear();
+        playbackQueue.addAll(items);
+        currentQueueIndex = -1;
+        for (int i = 0; i < playbackQueue.size(); i++) {
+            if (playbackQueue.get(i).path.equals(selectedPath)) {
+                currentQueueIndex = i;
+                break;
+            }
+        }
+    }
+
+    private void setLocalPlaybackQueue(File selectedFile) {
+        clearPlaybackQueue();
+        if (selectedFile == null || !selectedFile.isFile()) {
+            return;
+        }
+        File parent = selectedFile.getParentFile();
+        File[] files = parent == null ? null : parent.listFiles();
+        if (files == null) {
+            return;
+        }
+        List<RestrictedEntry> entries = new ArrayList<>();
+        for (File file : files) {
+            if (file.isFile()) {
+                RestrictedEntry entry = new RestrictedEntry(false, file.length(), file.getName(),
+                        file.getAbsolutePath());
+                if (entry.looksLikeVideo()) {
+                    entries.add(entry);
+                }
+            }
+        }
+        sortRestrictedEntries(entries, false);
+        List<PlaybackItem> queue = new ArrayList<>();
+        for (RestrictedEntry entry : entries) {
+            queue.add(new PlaybackItem(entry.path, false));
+        }
+        setPlaybackQueue(queue, selectedFile.getAbsolutePath());
+    }
+
+    private void clearPlaybackQueue() {
+        playbackQueue.clear();
+        currentQueueIndex = -1;
+    }
+
+    private boolean switchPlaybackItem(int direction) {
+        if (playbackQueue.size() <= 1 || currentQueueIndex < 0) {
+            showFeedback("没有可切换的视频");
+            return false;
+        }
+        int nextIndex = currentQueueIndex + direction;
+        if (nextIndex < 0 || nextIndex >= playbackQueue.size()) {
+            showFeedback(direction > 0 ? "已经是最后一个" : "已经是第一个");
+            return false;
+        }
+        currentQueueIndex = nextIndex;
+        PlaybackItem item = playbackQueue.get(currentQueueIndex);
+        showFeedback(direction > 0 ? "下一个" : "上一个");
+        openPlaybackItem(item, true);
+        return true;
+    }
+
+    private void removeFromPlaybackQueue(String path) {
+        for (int i = playbackQueue.size() - 1; i >= 0; i--) {
+            if (playbackQueue.get(i).path.equals(path)) {
+                playbackQueue.remove(i);
+                if (i < currentQueueIndex) {
+                    currentQueueIndex--;
+                } else if (i == currentQueueIndex) {
+                    currentQueueIndex = Math.min(i, playbackQueue.size() - 1);
+                }
+            }
+        }
+        if (playbackQueue.isEmpty()) {
+            currentQueueIndex = -1;
         }
     }
 
@@ -1169,9 +1318,16 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             if (entry.directory) {
                 showShizukuDirectory(entry.path);
             } else {
-                pathInput.setText(entry.path);
-                openRestrictedPathWithShizuku(entry.path);
+                openShizukuEntryFromDirectory(entries, entry);
             }
+        });
+        listView.setOnItemLongClickListener((parent, view, which, id) -> {
+            RestrictedEntry entry = entries.get(which);
+            if (entry.directory) {
+                return false;
+            }
+            showShizukuFileActions(path, rawEntries, sortBySize, entries, entry);
+            return true;
         });
         new AlertDialog.Builder(this)
                 .setTitle((sortBySize ? "大小 " : "名称 ") + path)
@@ -1180,6 +1336,242 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                         showShizukuDirectoryDialog(path, rawEntries, !sortBySize))
                 .setNegativeButton("取消", null)
                 .show();
+    }
+
+    private void openShizukuEntryFromDirectory(List<RestrictedEntry> entries, RestrictedEntry selected) {
+        List<PlaybackItem> queue = new ArrayList<>();
+        for (RestrictedEntry entry : entries) {
+            if (!entry.directory && entry.looksLikeVideo()) {
+                queue.add(new PlaybackItem(entry.path, true));
+            }
+        }
+        if (selected.looksLikeVideo()) {
+            setPlaybackQueue(queue, selected.path);
+        } else {
+            clearPlaybackQueue();
+        }
+        pathInput.setText(selected.path);
+        openRestrictedPathWithShizuku(selected.path);
+    }
+
+    private void showShizukuFileActions(String directoryPath, String[] rawEntries, boolean sortBySize,
+            List<RestrictedEntry> entries, RestrictedEntry entry) {
+        new AlertDialog.Builder(this)
+                .setTitle(entry.name)
+                .setItems(new CharSequence[]{"播放", "删除文件"}, (dialog, which) -> {
+                    if (which == 0) {
+                        openShizukuEntryFromDirectory(entries, entry);
+                    } else {
+                        confirmDeleteShizukuFile(directoryPath, rawEntries, sortBySize, entry);
+                    }
+                })
+                .show();
+    }
+
+    private void confirmDeleteShizukuFile(String directoryPath, String[] rawEntries, boolean sortBySize,
+            RestrictedEntry entry) {
+        new AlertDialog.Builder(this)
+                .setTitle("删除文件")
+                .setMessage("确定删除此文件？\n\n" + entry.name)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("删除", (dialog, which) ->
+                        deleteShizukuFile(directoryPath, rawEntries, sortBySize, entry))
+                .show();
+    }
+
+    private void confirmDeleteCurrentFile() {
+        String path = currentFilePath();
+        if (path == null || path.trim().isEmpty()) {
+            Toast.makeText(this, "当前没有可删除的文件", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("删除文件")
+                .setMessage("确定删除当前文件？\n\n" + new File(path).getName())
+                .setNegativeButton("取消", null)
+                .setPositiveButton("删除", (dialog, which) -> deleteCurrentFile(path))
+                .show();
+    }
+
+    private String currentFilePath() {
+        if (currentUri != null) {
+            if ("shizuku".equals(currentUri.getScheme())) {
+                return currentUri.getSchemeSpecificPart();
+            }
+            if ("content".equals(currentUri.getScheme())) {
+                return currentUri.toString();
+            }
+            if ("file".equals(currentUri.getScheme())) {
+                return currentUri.getPath();
+            }
+        }
+        String raw = pathInput == null ? "" : pathInput.getText().toString().trim();
+        if (raw.startsWith("file://")) {
+            return Uri.parse(raw).getPath();
+        }
+        if (!raw.startsWith("content://")) {
+            return raw;
+        }
+        return null;
+    }
+
+    private void deleteCurrentFile(String path) {
+        if (currentUri != null && "shizuku".equals(currentUri.getScheme())) {
+            deleteCurrentShizukuFile(path);
+            return;
+        }
+        if (path.startsWith("content://")) {
+            deleteCurrentContentUri(Uri.parse(path));
+            return;
+        }
+        if (looksLikeRestrictedPath(path)) {
+            confirmDeleteRestrictedPath(path);
+            return;
+        }
+        File file = new File(path);
+        if (!file.exists() || file.isDirectory()) {
+            Toast.makeText(this, "文件不可删除", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        releasePlayer();
+        if (file.delete()) {
+            removeFromPlaybackQueue(path);
+            pathInput.setText("");
+            titleText.setText("Smooth Player");
+            resetPlaybackDisplay();
+            Toast.makeText(this, "已删除", Toast.LENGTH_SHORT).show();
+        } else {
+            Toast.makeText(this, "删除失败", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void deleteCurrentContentUri(Uri uri) {
+        releasePlayer();
+        try {
+            int deleted = getContentResolver().delete(uri, null, null);
+            if (deleted > 0) {
+                clearPlaybackQueue();
+                currentUri = null;
+                pathInput.setText("");
+                titleText.setText("Smooth Player");
+                resetPlaybackDisplay();
+                Toast.makeText(this, "已删除", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(this, "系统文件选择器未允许删除", Toast.LENGTH_SHORT).show();
+            }
+        } catch (SecurityException | IllegalArgumentException exception) {
+            Log.w(TAG, "Content uri delete failed: " + uri, exception);
+            Toast.makeText(this, "没有删除权限", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void confirmDeleteRestrictedPath(String path) {
+        new AlertDialog.Builder(this)
+                .setTitle("受限路径删除")
+                .setMessage("此路径需要通过 Shizuku 删除。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("Shizuku 删除", (dialog, which) -> deleteCurrentShizukuFile(path))
+                .show();
+    }
+
+    private void deleteCurrentShizukuFile(String path) {
+        ProgressDialog progressDialog = new ProgressDialog(this);
+        progressDialog.setMessage("正在通过 Shizuku 删除文件");
+        progressDialog.setIndeterminate(true);
+        progressDialog.setCancelable(false);
+        progressDialog.show();
+        releasePlayer();
+        ioExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                boolean deleted = false;
+                try {
+                    ensureShizukuServiceBound();
+                    IRestrictedFileService service = restrictedFileService;
+                    if (service == null) {
+                        throw new IOException("Shizuku service is not connected");
+                    }
+                    deleted = service.deleteFile(path);
+                } catch (IOException | RemoteException | InterruptedException exception) {
+                    Log.w(TAG, "Current Shizuku delete failed: " + path, exception);
+                    if (exception instanceof InterruptedException) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                boolean success = deleted;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        progressDialog.dismiss();
+                        if (success) {
+                            previewCache.remove(path);
+                            previewLoading.remove(path);
+                            removeFromPlaybackQueue(path);
+                            currentUri = null;
+                            pathInput.setText("");
+                            titleText.setText("Smooth Player");
+                            resetPlaybackDisplay();
+                            Toast.makeText(MainActivity.this, "已删除", Toast.LENGTH_SHORT).show();
+                        } else {
+                            Toast.makeText(MainActivity.this, "删除失败", Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    private void deleteShizukuFile(String directoryPath, String[] rawEntries, boolean sortBySize,
+            RestrictedEntry entry) {
+        ProgressDialog progressDialog = new ProgressDialog(this);
+        progressDialog.setMessage("正在删除文件");
+        progressDialog.setIndeterminate(true);
+        progressDialog.setCancelable(false);
+        progressDialog.show();
+        ioExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                boolean deleted = false;
+                try {
+                    ensureShizukuServiceBound();
+                    IRestrictedFileService service = restrictedFileService;
+                    if (service == null) {
+                        throw new IOException("Shizuku service is not connected");
+                    }
+                    deleted = service.deleteFile(entry.path);
+                } catch (IOException | RemoteException | InterruptedException exception) {
+                    Log.w(TAG, "Shizuku delete failed: " + entry.path, exception);
+                    if (exception instanceof InterruptedException) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                boolean success = deleted;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        progressDialog.dismiss();
+                        if (success) {
+                            previewCache.remove(entry.path);
+                            previewLoading.remove(entry.path);
+                            removeFromPlaybackQueue(entry.path);
+                            if (currentUri != null && "shizuku".equals(currentUri.getScheme())
+                                    && entry.path.equals(currentUri.getSchemeSpecificPart())) {
+                                releasePlayer();
+                                currentUri = null;
+                                pathInput.setText("");
+                                titleText.setText("Smooth Player");
+                                resetPlaybackDisplay();
+                            }
+                            Toast.makeText(MainActivity.this, "已删除", Toast.LENGTH_SHORT).show();
+                            showShizukuDirectory(directoryPath);
+                        } else {
+                            Toast.makeText(MainActivity.this, "删除失败", Toast.LENGTH_SHORT).show();
+                            showShizukuDirectoryDialog(directoryPath, rawEntries, sortBySize);
+                        }
+                    }
+                });
+            }
+        });
     }
 
     private void sortRestrictedEntries(List<RestrictedEntry> entries, boolean sortBySize) {
@@ -1702,6 +2094,17 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         updatePlayButton();
     }
 
+    private void resetPlaybackDisplay() {
+        prepared = false;
+        if (seekBar != null) {
+            seekBar.setProgress(0);
+        }
+        if (timeText != null) {
+            timeText.setText("00:00 / 00:00");
+        }
+        updatePlayButton();
+    }
+
     private void updatePlayButton() {
         if (playButton == null || centerPlayButton == null) {
             return;
@@ -2162,6 +2565,16 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             this.preview = preview;
             this.name = name;
             this.meta = meta;
+        }
+    }
+
+    private static final class PlaybackItem {
+        final String path;
+        final boolean shizuku;
+
+        PlaybackItem(String path, boolean shizuku) {
+            this.path = path;
+            this.shizuku = shizuku;
         }
     }
 

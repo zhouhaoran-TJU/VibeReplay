@@ -1,6 +1,6 @@
 {
-  "versionCode": 11,
-  "versionName": "2.0-beta",
+  "versionCode": 12,
+  "versionName": "2.1-beta",
   "apkUrl": "https://github.com/zhouhaoran-TJU/VibeReplay/raw/main/dist/SmoothPlayer-beta.apk",
-  "notes": "修正三击快进/后退反馈，三击显示 +60s/-60s，双击仍显示 +10s/-10s。"
+  "notes": "新增删除文件功能；Shizuku 浏览支持长按删除；视频播放时左右滑动可切换同目录上一条/下一条视频。"
 }
