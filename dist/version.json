@@ -1,8 +1,8 @@
 {
-  "versionCode": 14,
-  "versionName": "2.3-beta",
+  "versionCode": 15,
+  "versionName": "2.4-beta",
   "apkUrl": "https://github.com/zhouhaoran-TJU/VibeReplay/raw/main/dist/SmoothPlayer-beta.apk",
-  "apkSize": 77159,
-  "sha256": "689002bc5922e6e48c50abeae67fb749083571f00f46f55222b78fc4cb8f498f",
-  "notes": "修复通过 Shizuku 浏览选择视频后文件浏览窗口仍停留在播放界面上的问题；进入子目录和开始播放时会自动关闭旧浏览窗口。"
+  "apkSize": 77427,
+  "sha256": "a233afb08459e447f8027d6d50e16209e0a1bd2f69f9f7ff2ace2d060dd997ba",
+  "notes": "Shizuku 浏览排序新增正序/倒序切换，名称、大小、时间排序均支持切换方向。"
 }

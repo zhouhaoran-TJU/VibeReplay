@@ -237,6 +237,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private boolean autoNext = true;
     private boolean videoOnlyBrowsing = true;
     private int shizukuSortMode;
+    private boolean shizukuSortAscending = true;
     private int previewGeneration;
     private boolean resumePlaying;
     private int videoWidth;
@@ -1395,7 +1396,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 }
             }
         }
-        sortRestrictedEntries(children, shizukuSortMode);
+        sortRestrictedEntries(children, shizukuSortMode, shizukuSortAscending);
         entries.addAll(children);
         ListView listView = new ListView(this);
         RestrictedEntryAdapter adapter = new RestrictedEntryAdapter(entries, generation);
@@ -1430,7 +1431,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                     getPreferences().edit().putBoolean(KEY_VIDEO_ONLY, videoOnlyBrowsing).apply();
                     showShizukuDirectoryDialog(path, rawEntries, shizukuSortMode == 1);
                 })
-                .setNegativeButton("取消", null)
+                .setNegativeButton(shizukuSortAscending ? "倒序" : "正序", (dialog, which) -> {
+                    shizukuSortAscending = !shizukuSortAscending;
+                    showShizukuDirectoryDialog(path, rawEntries, shizukuSortMode == 1);
+                })
                 .create();
         shizukuBrowserDialog.setOnDismissListener(dialog -> {
             if (shizukuBrowserDialog == dialog) {
@@ -1711,7 +1715,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         } else {
             sortName = "名称";
         }
-        return sortName + " " + breadcrumbPath(path);
+        return sortName + (shizukuSortAscending ? "正序 " : "倒序 ") + breadcrumbPath(path);
     }
 
     private String nextSortLabel() {
@@ -1732,28 +1736,32 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
 
     private void sortRestrictedEntries(List<RestrictedEntry> entries, boolean sortBySize) {
-        sortRestrictedEntries(entries, sortBySize ? 1 : 0);
+        sortRestrictedEntries(entries, sortBySize ? 1 : 0, true);
     }
 
     private void sortRestrictedEntries(List<RestrictedEntry> entries, int sortMode) {
+        sortRestrictedEntries(entries, sortMode, true);
+    }
+
+    private void sortRestrictedEntries(List<RestrictedEntry> entries, int sortMode, boolean ascending) {
         Collections.sort(entries, new Comparator<RestrictedEntry>() {
             @Override
             public int compare(RestrictedEntry left, RestrictedEntry right) {
                 if (left.directory != right.directory) {
                     return left.directory ? -1 : 1;
                 }
+                int result;
                 if (sortMode == 1 && !left.directory) {
-                    int sizeCompare = Long.compare(right.size, left.size);
-                    if (sizeCompare != 0) {
-                        return sizeCompare;
-                    }
+                    result = Long.compare(left.size, right.size);
                 } else if (sortMode == 2) {
-                    int timeCompare = Long.compare(right.modifiedTime, left.modifiedTime);
-                    if (timeCompare != 0) {
-                        return timeCompare;
-                    }
+                    result = Long.compare(left.modifiedTime, right.modifiedTime);
+                } else {
+                    result = left.name.toLowerCase(Locale.US).compareTo(right.name.toLowerCase(Locale.US));
                 }
-                return left.name.toLowerCase(Locale.US).compareTo(right.name.toLowerCase(Locale.US));
+                if (result == 0) {
+                    result = left.name.toLowerCase(Locale.US).compareTo(right.name.toLowerCase(Locale.US));
+                }
+                return ascending ? result : -result;
             }
         });
     }
