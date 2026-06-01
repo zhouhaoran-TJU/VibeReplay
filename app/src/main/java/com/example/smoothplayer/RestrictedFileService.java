@@ -37,7 +37,8 @@ public final class RestrictedFileService extends IRestrictedFileService.Stub {
         List<String> entries = new ArrayList<>();
         for (File file : files) {
             String prefix = file.isDirectory() ? "D|" : "F|";
-            entries.add(prefix + file.length() + "|" + file.getName() + "|" + file.getAbsolutePath());
+            entries.add(prefix + file.length() + "|" + file.lastModified() + "|" + file.getName()
+                    + "|" + file.getAbsolutePath());
         }
         Collections.sort(entries, (left, right) -> {
             boolean leftDir = left.startsWith("D|");

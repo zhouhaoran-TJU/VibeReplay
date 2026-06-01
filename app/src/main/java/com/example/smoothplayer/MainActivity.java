@@ -41,6 +41,7 @@ import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.BaseAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -63,11 +64,14 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -90,15 +94,20 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private static final String KEY_LAST_SPEED = "last_speed";
     private static final String KEY_LAST_FILL = "last_fill";
     private static final String KEY_PRIVACY_ACCEPTED = "privacy_accepted";
+    private static final String KEY_AUTO_NEXT = "auto_next";
+    private static final String KEY_VIDEO_ONLY = "video_only";
     private static final String ROOT_CACHE_DIR = "root-cache";
     private static final String ROOT_MOUNT_DIR = "root-mount";
+    private static final int PREVIEW_CACHE_LIMIT = 80;
     private static final int REQUEST_SHIZUKU_PERMISSION = 1003;
     private static final long TAP_DELAY_MS = 260L;
     private static final long LONG_PRESS_DELAY_MS = 420L;
     private static final String UPDATE_INFO_URL =
             "https://raw.githubusercontent.com/zhouhaoran-TJU/VibeReplay/main/dist/version.json";
-    private static final String[] SPEED_LABELS = {"0.5x", "0.75x", "1x", "1.25x", "1.5x", "2x"};
-    private static final float[] SPEED_VALUES = {0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f};
+    private static final String[] SPEED_LABELS = {
+            "0.5x", "0.75x", "1x", "1.25x", "1.5x", "2x", "2.5x", "3x"
+    };
+    private static final float[] SPEED_VALUES = {0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f, 2.5f, 3f};
     private static final String[] PICKER_MIME_TYPES = {
             "video/*",
             "audio/*",
@@ -109,7 +118,19 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
-    private final Map<String, Bitmap> previewCache = new HashMap<>();
+    private final Map<String, Bitmap> previewCache = new LinkedHashMap<String, Bitmap>(PREVIEW_CACHE_LIMIT, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Bitmap> eldest) {
+            if (size() <= PREVIEW_CACHE_LIMIT) {
+                return false;
+            }
+            Bitmap bitmap = eldest.getValue();
+            if (bitmap != null && !bitmap.isRecycled()) {
+                bitmap.recycle();
+            }
+            return true;
+        }
+    };
     private final Set<String> previewLoading = new HashSet<>();
     private final Runnable progressTick = new Runnable() {
         @Override
@@ -147,7 +168,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                     .daemon(false)
                     .processNameSuffix("restricted_file")
                     .debuggable(BuildConfig.DEBUG)
-                    .version(2);
+                    .version(3);
     private final ServiceConnection shizukuConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
@@ -191,6 +212,9 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private Button centerPlayButton;
     private Button fitButton;
     private Button lockButton;
+    private Button previousButton;
+    private Button nextButton;
+    private Button autoNextButton;
     private SeekBar seekBar;
     private TextView timeText;
     private TextView titleText;
@@ -210,6 +234,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private boolean controlsVisible = true;
     private boolean controlsLocked;
     private boolean fillMode;
+    private boolean autoNext = true;
+    private boolean videoOnlyBrowsing = true;
+    private int shizukuSortMode;
+    private int previewGeneration;
     private boolean resumePlaying;
     private int videoWidth;
     private int videoHeight;
@@ -396,6 +424,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 : savedInstanceState.getFloat(KEY_LAST_SPEED, 1f);
         fillMode = savedInstanceState == null ? prefs.getBoolean(KEY_LAST_FILL, false)
                 : savedInstanceState.getBoolean(KEY_LAST_FILL, false);
+        autoNext = prefs.getBoolean(KEY_AUTO_NEXT, true);
+        videoOnlyBrowsing = prefs.getBoolean(KEY_VIDEO_ONLY, true);
     }
 
     private void buildLayout() {
@@ -613,6 +643,28 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         });
         primaryRow.addView(playButton, new LinearLayout.LayoutParams(dp(54), dp(42)));
 
+        previousButton = makeButton("◀◀");
+        previousButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                switchPlaybackItem(-1);
+            }
+        });
+        LinearLayout.LayoutParams previousParams = new LinearLayout.LayoutParams(dp(58), dp(42));
+        previousParams.leftMargin = dp(8);
+        primaryRow.addView(previousButton, previousParams);
+
+        nextButton = makeButton("▶▶");
+        nextButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                switchPlaybackItem(1);
+            }
+        });
+        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(58), dp(42));
+        nextParams.leftMargin = dp(8);
+        primaryRow.addView(nextButton, nextParams);
+
         timeText = makeText(13, Color.rgb(220, 226, 235), false);
         timeText.setText("00:00 / 00:00");
         LinearLayout.LayoutParams timeParams = new LinearLayout.LayoutParams(0,
@@ -676,6 +728,20 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         LinearLayout.LayoutParams lockParams = new LinearLayout.LayoutParams(dp(72), dp(42));
         lockParams.leftMargin = dp(8);
         optionsRow.addView(lockButton, lockParams);
+
+        autoNextButton = makeButton(autoNext ? "连播" : "单集");
+        autoNextButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                autoNext = !autoNext;
+                autoNextButton.setText(autoNext ? "连播" : "单集");
+                getPreferences().edit().putBoolean(KEY_AUTO_NEXT, autoNext).apply();
+                revealControls();
+            }
+        });
+        LinearLayout.LayoutParams autoNextParams = new LinearLayout.LayoutParams(dp(72), dp(42));
+        autoNextParams.leftMargin = dp(8);
+        optionsRow.addView(autoNextButton, autoNextParams);
         bottomBar.addView(optionsRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -1035,8 +1101,9 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                     videoWidth = mediaPlayer.getVideoWidth();
                     videoHeight = mediaPlayer.getVideoHeight();
                     titleText.setText(displayTitle(uri));
-                    if (seekMs > 0) {
-                        mediaPlayer.seekTo(Math.min(seekMs, mediaPlayer.getDuration()));
+                    int resumeMs = seekMs > 0 ? seekMs : savedVideoPosition(uri);
+                    if (resumeMs > 0) {
+                        mediaPlayer.seekTo(Math.min(resumeMs, mediaPlayer.getDuration()));
                     }
                     if (autoPlay) {
                         mediaPlayer.start();
@@ -1059,8 +1126,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             player.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
                 @Override
                 public void onCompletion(MediaPlayer mediaPlayer) {
-                    savePlaybackPosition(0);
+                    saveVideoPosition(uri, 0);
                     updatePlayButton();
+                    if (autoNext && switchPlaybackItem(1)) {
+                        return;
+                    }
                     revealControls();
                     showFeedback("播放完成");
                 }
@@ -1096,6 +1166,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         if (item == null) {
             return;
         }
+        saveCurrentVideoPosition();
         pathInput.setText(item.path);
         saveLastPath(item.path);
         if (item.shizuku) {
@@ -1130,8 +1201,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         List<RestrictedEntry> entries = new ArrayList<>();
         for (File file : files) {
             if (file.isFile()) {
-                RestrictedEntry entry = new RestrictedEntry(false, file.length(), file.getName(),
-                        file.getAbsolutePath());
+                RestrictedEntry entry = new RestrictedEntry(false, file.length(), file.lastModified(),
+                        file.getName(), file.getAbsolutePath());
                 if (entry.looksLikeVideo()) {
                     entries.add(entry);
                 }
@@ -1160,17 +1231,24 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             showFeedback(direction > 0 ? "已经是最后一个" : "已经是第一个");
             return false;
         }
+        boolean wasPlaying = player != null && prepared && player.isPlaying();
         currentQueueIndex = nextIndex;
         PlaybackItem item = playbackQueue.get(currentQueueIndex);
         showFeedback(direction > 0 ? "下一个" : "上一个");
-        openPlaybackItem(item, true);
+        openPlaybackItem(item, wasPlaying || autoNext);
         return true;
     }
 
-    private void removeFromPlaybackQueue(String path) {
+    private PlaybackItem removeFromPlaybackQueue(String path) {
+        PlaybackItem fallback = null;
         for (int i = playbackQueue.size() - 1; i >= 0; i--) {
             if (playbackQueue.get(i).path.equals(path)) {
                 playbackQueue.remove(i);
+                if (i < playbackQueue.size()) {
+                    fallback = playbackQueue.get(i);
+                } else if (!playbackQueue.isEmpty()) {
+                    fallback = playbackQueue.get(playbackQueue.size() - 1);
+                }
                 if (i < currentQueueIndex) {
                     currentQueueIndex--;
                 } else if (i == currentQueueIndex) {
@@ -1181,6 +1259,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         if (playbackQueue.isEmpty()) {
             currentQueueIndex = -1;
         }
+        return fallback;
     }
 
     private void openRestrictedPathOptions(String path) {
@@ -1297,21 +1376,26 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
 
     private void showShizukuDirectoryDialog(String path, String[] rawEntries, boolean sortBySize) {
+        shizukuSortMode = sortBySize ? 1 : shizukuSortMode;
+        previewGeneration++;
+        int generation = previewGeneration;
         List<RestrictedEntry> entries = new ArrayList<>();
         if (!"/sdcard".equals(path)) {
-            entries.add(new RestrictedEntry(true, 0L, "..", parentPath(path)));
+            entries.add(new RestrictedEntry(true, 0L, 0L, "..", parentPath(path)));
         }
         List<RestrictedEntry> children = new ArrayList<>();
         for (String rawEntry : rawEntries) {
             RestrictedEntry entry = RestrictedEntry.parse(rawEntry);
             if (entry != null) {
-                children.add(entry);
+                if (!videoOnlyBrowsing || entry.directory || entry.looksLikeVideo()) {
+                    children.add(entry);
+                }
             }
         }
-        sortRestrictedEntries(children, sortBySize);
+        sortRestrictedEntries(children, shizukuSortMode);
         entries.addAll(children);
         ListView listView = new ListView(this);
-        RestrictedEntryAdapter adapter = new RestrictedEntryAdapter(entries);
+        RestrictedEntryAdapter adapter = new RestrictedEntryAdapter(entries, generation);
         listView.setAdapter(adapter);
         listView.setOnItemClickListener((parent, view, which, id) -> {
             RestrictedEntry entry = entries.get(which);
@@ -1330,10 +1414,17 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             return true;
         });
         new AlertDialog.Builder(this)
-                .setTitle((sortBySize ? "大小 " : "名称 ") + path)
+                .setTitle(shizukuTitle(path))
                 .setView(listView)
-                .setPositiveButton(sortBySize ? "按名称" : "按大小", (dialog, which) ->
-                        showShizukuDirectoryDialog(path, rawEntries, !sortBySize))
+                .setPositiveButton(nextSortLabel(), (dialog, which) -> {
+                    shizukuSortMode = (shizukuSortMode + 1) % 3;
+                    showShizukuDirectoryDialog(path, rawEntries, shizukuSortMode == 1);
+                })
+                .setNeutralButton(videoOnlyBrowsing ? "全部文件" : "仅视频", (dialog, which) -> {
+                    videoOnlyBrowsing = !videoOnlyBrowsing;
+                    getPreferences().edit().putBoolean(KEY_VIDEO_ONLY, videoOnlyBrowsing).apply();
+                    showShizukuDirectoryDialog(path, rawEntries, shizukuSortMode == 1);
+                })
                 .setNegativeButton("取消", null)
                 .show();
     }
@@ -1372,7 +1463,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             RestrictedEntry entry) {
         new AlertDialog.Builder(this)
                 .setTitle("删除文件")
-                .setMessage("确定删除此文件？\n\n" + entry.name)
+                .setMessage("确定删除此文件？\n\n" + entry.name + "\n" + entry.readableSize()
+                        + "\n" + entry.path)
                 .setNegativeButton("取消", null)
                 .setPositiveButton("删除", (dialog, which) ->
                         deleteShizukuFile(directoryPath, rawEntries, sortBySize, entry))
@@ -1435,10 +1527,14 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         }
         releasePlayer();
         if (file.delete()) {
-            removeFromPlaybackQueue(path);
-            pathInput.setText("");
-            titleText.setText("Smooth Player");
-            resetPlaybackDisplay();
+            PlaybackItem fallback = removeFromPlaybackQueue(path);
+            if (fallback != null) {
+                openPlaybackItem(fallback, true);
+            } else {
+                pathInput.setText("");
+                titleText.setText("Smooth Player");
+                resetPlaybackDisplay();
+            }
             Toast.makeText(this, "已删除", Toast.LENGTH_SHORT).show();
         } else {
             Toast.makeText(this, "删除失败", Toast.LENGTH_SHORT).show();
@@ -1506,11 +1602,15 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                         if (success) {
                             previewCache.remove(path);
                             previewLoading.remove(path);
-                            removeFromPlaybackQueue(path);
+                            PlaybackItem fallback = removeFromPlaybackQueue(path);
                             currentUri = null;
-                            pathInput.setText("");
-                            titleText.setText("Smooth Player");
-                            resetPlaybackDisplay();
+                            if (fallback != null) {
+                                openPlaybackItem(fallback, true);
+                            } else {
+                                pathInput.setText("");
+                                titleText.setText("Smooth Player");
+                                resetPlaybackDisplay();
+                            }
                             Toast.makeText(MainActivity.this, "已删除", Toast.LENGTH_SHORT).show();
                         } else {
                             Toast.makeText(MainActivity.this, "删除失败", Toast.LENGTH_SHORT).show();
@@ -1553,14 +1653,18 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                         if (success) {
                             previewCache.remove(entry.path);
                             previewLoading.remove(entry.path);
-                            removeFromPlaybackQueue(entry.path);
+                            PlaybackItem fallback = removeFromPlaybackQueue(entry.path);
                             if (currentUri != null && "shizuku".equals(currentUri.getScheme())
                                     && entry.path.equals(currentUri.getSchemeSpecificPart())) {
                                 releasePlayer();
                                 currentUri = null;
-                                pathInput.setText("");
-                                titleText.setText("Smooth Player");
-                                resetPlaybackDisplay();
+                                if (fallback != null) {
+                                    openPlaybackItem(fallback, true);
+                                } else {
+                                    pathInput.setText("");
+                                    titleText.setText("Smooth Player");
+                                    resetPlaybackDisplay();
+                                }
                             }
                             Toast.makeText(MainActivity.this, "已删除", Toast.LENGTH_SHORT).show();
                             showShizukuDirectory(directoryPath);
@@ -1574,17 +1678,55 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         });
     }
 
+    private String shizukuTitle(String path) {
+        String sortName;
+        if (shizukuSortMode == 1) {
+            sortName = "大小";
+        } else if (shizukuSortMode == 2) {
+            sortName = "时间";
+        } else {
+            sortName = "名称";
+        }
+        return sortName + " " + breadcrumbPath(path);
+    }
+
+    private String nextSortLabel() {
+        if (shizukuSortMode == 0) {
+            return "按大小";
+        }
+        if (shizukuSortMode == 1) {
+            return "按时间";
+        }
+        return "按名称";
+    }
+
+    private String breadcrumbPath(String path) {
+        if (path == null || path.trim().isEmpty()) {
+            return "/sdcard";
+        }
+        return path.replace("/", " > ").replaceFirst("^ > ", "/");
+    }
+
     private void sortRestrictedEntries(List<RestrictedEntry> entries, boolean sortBySize) {
+        sortRestrictedEntries(entries, sortBySize ? 1 : 0);
+    }
+
+    private void sortRestrictedEntries(List<RestrictedEntry> entries, int sortMode) {
         Collections.sort(entries, new Comparator<RestrictedEntry>() {
             @Override
             public int compare(RestrictedEntry left, RestrictedEntry right) {
                 if (left.directory != right.directory) {
                     return left.directory ? -1 : 1;
                 }
-                if (sortBySize && !left.directory) {
+                if (sortMode == 1 && !left.directory) {
                     int sizeCompare = Long.compare(right.size, left.size);
                     if (sizeCompare != 0) {
                         return sizeCompare;
+                    }
+                } else if (sortMode == 2) {
+                    int timeCompare = Long.compare(right.modifiedTime, left.modifiedTime);
+                    if (timeCompare != 0) {
+                        return timeCompare;
                     }
                 }
                 return left.name.toLowerCase(Locale.US).compareTo(right.name.toLowerCase(Locale.US));
@@ -1995,9 +2137,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         int duration = player.getDuration();
         int next = Math.max(0, Math.min(duration, player.getCurrentPosition() + deltaMs));
         player.seekTo(next);
+        saveVideoPosition(currentUri, next);
         updateProgress();
         int seconds = Math.abs(deltaMs) / 1000;
-        showFeedback((deltaMs > 0 ? "+" : "-") + seconds + "s");
+        showFeedback((deltaMs > 0 ? "+" : "-") + seconds + "s  " + formatTime(next));
     }
 
     private void startLongPressSpeed() {
@@ -2189,12 +2332,14 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                     String latestName = info.optString("versionName", "");
                     String apkUrl = info.optString("apkUrl", "");
                     String notes = info.optString("notes", "");
+                    long apkSize = info.optLong("apkSize", 0L);
+                    String sha256 = info.optString("sha256", "");
                     int currentCode = packageInfo().versionCode;
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
                             if (latestCode > currentCode && !apkUrl.isEmpty()) {
-                                showUpdateDialog(latestName, notes, apkUrl);
+                                showUpdateDialog(latestName, notes, apkUrl, apkSize, sha256);
                             } else if (manual) {
                                 Toast.makeText(MainActivity.this, "当前已是最新版本", Toast.LENGTH_SHORT).show();
                             }
@@ -2215,8 +2360,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         });
     }
 
-    private void showUpdateDialog(String versionName, String notes, String apkUrl) {
+    private void showUpdateDialog(String versionName, String notes, String apkUrl, long apkSize, String sha256) {
         String message = "发现新版本 " + versionName;
+        if (apkSize > 0L) {
+            message += "\n大小：" + formatFileSize(apkSize);
+        }
         if (notes != null && !notes.trim().isEmpty()) {
             message += "\n\n" + notes.trim();
         }
@@ -2224,11 +2372,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 .setTitle("Smooth Player 更新")
                 .setMessage(message)
                 .setNegativeButton("稍后", null)
-                .setPositiveButton("下载并安装", (dialog, which) -> downloadAndInstallUpdate(apkUrl))
+                .setPositiveButton("下载并安装", (dialog, which) -> downloadAndInstallUpdate(apkUrl, sha256))
                 .show();
     }
 
-    private void downloadAndInstallUpdate(String apkUrl) {
+    private void downloadAndInstallUpdate(String apkUrl, String sha256) {
         ProgressDialog progressDialog = new ProgressDialog(this);
         progressDialog.setMessage("正在下载更新包");
         progressDialog.setIndeterminate(true);
@@ -2240,6 +2388,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 try {
                     File apkFile = new File(getExternalFilesDir(null), ApkProvider.APK_NAME);
                     downloadFile(apkUrl, apkFile);
+                    if (sha256 != null && !sha256.trim().isEmpty()
+                            && !sha256.equalsIgnoreCase(sha256(apkFile))) {
+                        throw new IOException("APK 校验失败");
+                    }
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
@@ -2313,6 +2465,27 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         }
     }
 
+    private String sha256(File file) throws IOException {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (InputStream inputStream = new java.io.FileInputStream(file)) {
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = inputStream.read(buffer)) >= 0) {
+                    digest.update(buffer, 0, count);
+                }
+            }
+            byte[] hash = digest.digest();
+            StringBuilder builder = new StringBuilder(hash.length * 2);
+            for (byte value : hash) {
+                builder.append(String.format(Locale.US, "%02x", value & 0xff));
+            }
+            return builder.toString();
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IOException("SHA-256 is unavailable", exception);
+        }
+    }
+
     private void releasePlayer() {
         if (player != null) {
             try {
@@ -2339,6 +2512,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
 
     private void savePlaybackState() {
+        saveCurrentVideoPosition();
         getPreferences().edit()
                 .putString(KEY_LAST_PATH, currentUri == null ? pathInput.getText().toString() : currentUri.toString())
                 .putInt(KEY_LAST_POSITION, currentPosition())
@@ -2349,6 +2523,32 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
 
     private void savePlaybackPosition(int positionMs) {
         getPreferences().edit().putInt(KEY_LAST_POSITION, positionMs).apply();
+    }
+
+    private void saveCurrentVideoPosition() {
+        if (currentUri != null && player != null && prepared) {
+            saveVideoPosition(currentUri, currentPosition());
+        }
+    }
+
+    private void saveVideoPosition(Uri uri, int positionMs) {
+        if (uri == null) {
+            return;
+        }
+        getPreferences().edit()
+                .putInt(videoPositionKey(uri), Math.max(positionMs, 0))
+                .apply();
+    }
+
+    private int savedVideoPosition(Uri uri) {
+        if (uri == null) {
+            return 0;
+        }
+        return getPreferences().getInt(videoPositionKey(uri), 0);
+    }
+
+    private String videoPositionKey(Uri uri) {
+        return "video_position_" + Integer.toHexString(uri.toString().hashCode());
     }
 
     private int currentPosition() {
@@ -2474,9 +2674,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
 
     private final class RestrictedEntryAdapter extends BaseAdapter {
         private final List<RestrictedEntry> entries;
+        private final int generation;
 
-        RestrictedEntryAdapter(List<RestrictedEntry> entries) {
+        RestrictedEntryAdapter(List<RestrictedEntry> entries, int generation) {
             this.entries = entries;
+            this.generation = generation;
         }
 
         @Override
@@ -2546,7 +2748,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 } else if (entry.looksLikeVideo()) {
                     holder.preview.setImageBitmap(null);
                     holder.preview.setImageResource(android.R.drawable.ic_media_play);
-                    loadListPreview(entry, this);
+                    loadListPreview(entry, this, generation);
                 } else {
                     holder.preview.setImageBitmap(null);
                     holder.preview.setImageResource(android.R.drawable.ic_menu_save);
@@ -2578,7 +2780,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         }
     }
 
-    private void loadListPreview(RestrictedEntry entry, BaseAdapter adapter) {
+    private void loadListPreview(RestrictedEntry entry, BaseAdapter adapter, int generation) {
         if (previewCache.containsKey(entry.path) || previewLoading.contains(entry.path)) {
             return;
         }
@@ -2587,19 +2789,28 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             @Override
             public void run() {
                 try {
+                    if (generation != previewGeneration) {
+                        return;
+                    }
                     Bitmap bitmap = loadVideoFrame(entry.path);
-                    if (bitmap != null) {
+                    if (bitmap != null && generation == previewGeneration) {
                         Bitmap scaled = Bitmap.createScaledBitmap(bitmap, dp(96), dp(54), true);
                         previewCache.put(entry.path, scaled);
                     }
                 } catch (IOException | RemoteException | InterruptedException exception) {
                     Log.w(TAG, "Failed to load list preview: " + entry.path, exception);
+                    if (exception instanceof InterruptedException) {
+                        Thread.currentThread().interrupt();
+                    }
+                } finally {
+                    previewLoading.remove(entry.path);
                 }
-                previewLoading.remove(entry.path);
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {
-                        adapter.notifyDataSetChanged();
+                        if (generation == previewGeneration) {
+                            adapter.notifyDataSetChanged();
+                        }
                     }
                 });
             }
@@ -2609,12 +2820,14 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private static final class RestrictedEntry {
         final boolean directory;
         final long size;
+        final long modifiedTime;
         final String name;
         final String path;
 
-        RestrictedEntry(boolean directory, long size, String name, String path) {
+        RestrictedEntry(boolean directory, long size, long modifiedTime, String name, String path) {
             this.directory = directory;
             this.size = size;
+            this.modifiedTime = modifiedTime;
             this.name = name;
             this.path = path;
         }
@@ -2651,16 +2864,30 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             if (value == null) {
                 return null;
             }
-            String[] parts = value.split("\\|", 4);
-            if (parts.length != 4) {
-                return null;
+            String[] parts = value.split("\\|", 5);
+            if (parts.length != 5) {
+                String[] legacyParts = value.split("\\|", 4);
+                if (legacyParts.length != 4) {
+                    return null;
+                }
+                long legacySize = parseLong(legacyParts[1]);
+                return new RestrictedEntry("D".equals(legacyParts[0]), legacySize, 0L,
+                        legacyParts[2], legacyParts[3]);
             }
-            long size = 0L;
+            long size = parseLong(parts[1]);
+            long modifiedTime = parseLong(parts[2]);
+            return new RestrictedEntry("D".equals(parts[0]), size, modifiedTime, parts[3], parts[4]);
+        }
+
+        private static long parseLong(String value) {
+            if (value == null) {
+                return 0L;
+            }
             try {
-                size = Long.parseLong(parts[1]);
+                return Long.parseLong(value);
             } catch (NumberFormatException ignored) {
+                return 0L;
             }
-            return new RestrictedEntry("D".equals(parts[0]), size, parts[2], parts[3]);
         }
     }
 }
