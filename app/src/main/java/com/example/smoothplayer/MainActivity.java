@@ -39,11 +39,13 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
+import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ListView;
 import android.widget.ProgressBar;
 import android.widget.SeekBar;
 import android.widget.Spinner;
@@ -64,8 +66,12 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -101,6 +107,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
+    private final Map<String, Bitmap> previewCache = new HashMap<>();
+    private final Set<String> previewLoading = new HashSet<>();
     private final Runnable progressTick = new Runnable() {
         @Override
         public void run() {
@@ -1153,22 +1161,21 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         }
         sortRestrictedEntries(children, sortBySize);
         entries.addAll(children);
-        CharSequence[] labels = new CharSequence[entries.size()];
-        for (int i = 0; i < entries.size(); i++) {
-            RestrictedEntry entry = entries.get(i);
-            labels[i] = entry.label();
-        }
+        ListView listView = new ListView(this);
+        RestrictedEntryAdapter adapter = new RestrictedEntryAdapter(entries);
+        listView.setAdapter(adapter);
+        listView.setOnItemClickListener((parent, view, which, id) -> {
+            RestrictedEntry entry = entries.get(which);
+            if (entry.directory) {
+                showShizukuDirectory(entry.path);
+            } else {
+                pathInput.setText(entry.path);
+                openRestrictedPathWithShizuku(entry.path);
+            }
+        });
         new AlertDialog.Builder(this)
                 .setTitle((sortBySize ? "大小 " : "名称 ") + path)
-                .setItems(labels, (dialog, which) -> {
-                    RestrictedEntry entry = entries.get(which);
-                    if (entry.directory) {
-                        showShizukuDirectory(entry.path);
-                    } else {
-                        pathInput.setText(entry.path);
-                        showVideoPreview(entry);
-                    }
-                })
+                .setView(listView)
                 .setPositiveButton(sortBySize ? "按名称" : "按大小", (dialog, which) ->
                         showShizukuDirectoryDialog(path, rawEntries, !sortBySize))
                 .setNegativeButton("取消", null)
@@ -2061,6 +2068,130 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
     }
 
+    private final class RestrictedEntryAdapter extends BaseAdapter {
+        private final List<RestrictedEntry> entries;
+
+        RestrictedEntryAdapter(List<RestrictedEntry> entries) {
+            this.entries = entries;
+        }
+
+        @Override
+        public int getCount() {
+            return entries.size();
+        }
+
+        @Override
+        public RestrictedEntry getItem(int position) {
+            return entries.get(position);
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return position;
+        }
+
+        @Override
+        public View getView(int position, View convertView, android.view.ViewGroup parent) {
+            RowHolder holder;
+            if (convertView == null) {
+                LinearLayout row = new LinearLayout(MainActivity.this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(dp(12), dp(8), dp(12), dp(8));
+
+                ImageView preview = new ImageView(MainActivity.this);
+                preview.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                LinearLayout.LayoutParams previewParams = new LinearLayout.LayoutParams(dp(96), dp(54));
+                row.addView(preview, previewParams);
+
+                LinearLayout textColumn = new LinearLayout(MainActivity.this);
+                textColumn.setOrientation(LinearLayout.VERTICAL);
+                textColumn.setPadding(dp(12), 0, 0, 0);
+                TextView name = makeText(14, Color.WHITE, true);
+                name.setSingleLine(true);
+                TextView meta = makeText(12, Color.rgb(174, 183, 194), false);
+                textColumn.addView(name, new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT));
+                textColumn.addView(meta, new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT));
+                row.addView(textColumn, new LinearLayout.LayoutParams(0,
+                        LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+                holder = new RowHolder(preview, name, meta);
+                row.setTag(holder);
+                convertView = row;
+            } else {
+                holder = (RowHolder) convertView.getTag();
+            }
+
+            RestrictedEntry entry = getItem(position);
+            holder.name.setText(entry.name);
+            holder.meta.setText(entry.directory ? "目录" : entry.readableSize());
+            if (entry.directory) {
+                holder.preview.setImageBitmap(null);
+                holder.preview.setBackgroundColor(Color.rgb(24, 35, 46));
+                holder.preview.setColorFilter(null);
+                holder.preview.setImageResource(android.R.drawable.ic_menu_upload);
+            } else {
+                holder.preview.setBackgroundColor(Color.rgb(18, 24, 31));
+                Bitmap cached = previewCache.get(entry.path);
+                if (cached != null) {
+                    holder.preview.setImageBitmap(cached);
+                } else if (entry.looksLikeVideo()) {
+                    holder.preview.setImageBitmap(null);
+                    holder.preview.setImageResource(android.R.drawable.ic_media_play);
+                    loadListPreview(entry, this);
+                } else {
+                    holder.preview.setImageBitmap(null);
+                    holder.preview.setImageResource(android.R.drawable.ic_menu_save);
+                }
+            }
+            return convertView;
+        }
+    }
+
+    private static final class RowHolder {
+        final ImageView preview;
+        final TextView name;
+        final TextView meta;
+
+        RowHolder(ImageView preview, TextView name, TextView meta) {
+            this.preview = preview;
+            this.name = name;
+            this.meta = meta;
+        }
+    }
+
+    private void loadListPreview(RestrictedEntry entry, BaseAdapter adapter) {
+        if (previewCache.containsKey(entry.path) || previewLoading.contains(entry.path)) {
+            return;
+        }
+        previewLoading.add(entry.path);
+        ioExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Bitmap bitmap = loadVideoFrame(entry.path);
+                    if (bitmap != null) {
+                        Bitmap scaled = Bitmap.createScaledBitmap(bitmap, dp(96), dp(54), true);
+                        previewCache.put(entry.path, scaled);
+                    }
+                } catch (IOException | RemoteException | InterruptedException exception) {
+                    Log.w(TAG, "Failed to load list preview: " + entry.path, exception);
+                }
+                previewLoading.remove(entry.path);
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        adapter.notifyDataSetChanged();
+                    }
+                });
+            }
+        });
+    }
+
     private static final class RestrictedEntry {
         final boolean directory;
         final long size;
@@ -2093,6 +2224,13 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 unitIndex++;
             }
             return String.format(Locale.US, "%.1f %s", value, units[unitIndex]);
+        }
+
+        boolean looksLikeVideo() {
+            String lower = name.toLowerCase(Locale.US);
+            return lower.endsWith(".mp4") || lower.endsWith(".mkv") || lower.endsWith(".webm")
+                    || lower.endsWith(".avi") || lower.endsWith(".mov") || lower.endsWith(".m4v")
+                    || lower.endsWith(".ts") || lower.endsWith(".3gp") || lower.endsWith(".flv");
         }
 
         static RestrictedEntry parse(String value) {
