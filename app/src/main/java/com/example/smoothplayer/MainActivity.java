@@ -75,6 +75,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -109,6 +110,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private static final int SCALE_MODE_FILL = 1;
     private static final int SCALE_MODE_STRETCH = 2;
     private static final int SCALE_MODE_ORIGINAL = 3;
+    private static final int SORT_NAME = 0;
+    private static final int SORT_SIZE = 1;
+    private static final int SORT_TIME = 2;
+    private static final int SORT_RANDOM = 3;
     private static final int GESTURE_NONE = 0;
     private static final int GESTURE_VOLUME = 1;
     private static final int GESTURE_BRIGHTNESS = 2;
@@ -260,6 +265,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private boolean videoOnlyBrowsing = true;
     private int shizukuSortMode;
     private boolean shizukuSortAscending = true;
+    private long shizukuRandomSeed = System.nanoTime();
     private int previewGeneration;
     private boolean resumePlaying;
     private int videoWidth;
@@ -910,7 +916,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         browserDirectionButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                shizukuSortAscending = !shizukuSortAscending;
+                if (shizukuSortMode == SORT_RANDOM) {
+                    shizukuRandomSeed = System.nanoTime();
+                } else {
+                    shizukuSortAscending = !shizukuSortAscending;
+                }
                 refreshCurrentBrowserEntries();
             }
         });
@@ -1797,7 +1807,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             browserSortButton.setText(currentSortName());
         }
         if (browserDirectionButton != null) {
-            browserDirectionButton.setText(shizukuSortAscending ? "正序" : "倒序");
+            browserDirectionButton.setText(shizukuSortMode == SORT_RANDOM ? "重排"
+                    : (shizukuSortAscending ? "正序" : "倒序"));
         }
         if (browserFilterButton != null) {
             browserFilterButton.setText(videoOnlyBrowsing ? "仅视频" : "全部");
@@ -1807,8 +1818,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private void showSortModeMenu() {
         new AlertDialog.Builder(this)
                 .setTitle("排序")
-                .setItems(new CharSequence[]{"名称", "大小", "时间"}, (dialog, which) -> {
+                .setItems(new CharSequence[]{"名称", "大小", "时间", "随机"}, (dialog, which) -> {
                     shizukuSortMode = which;
+                    if (shizukuSortMode == SORT_RANDOM) {
+                        shizukuRandomSeed = System.nanoTime();
+                    }
                     refreshCurrentBrowserEntries();
                 })
                 .show();
@@ -2066,15 +2080,20 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
 
     private String shizukuTitle(String path) {
+        if (shizukuSortMode == SORT_RANDOM) {
+            return currentSortName() + " " + breadcrumbPath(path);
+        }
         return currentSortName() + (shizukuSortAscending ? "正序 " : "倒序 ") + breadcrumbPath(path);
     }
 
     private String currentSortName() {
         String sortName;
-        if (shizukuSortMode == 1) {
+        if (shizukuSortMode == SORT_SIZE) {
             sortName = "大小";
-        } else if (shizukuSortMode == 2) {
+        } else if (shizukuSortMode == SORT_TIME) {
             sortName = "时间";
+        } else if (shizukuSortMode == SORT_RANDOM) {
+            sortName = "随机";
         } else {
             sortName = "名称";
         }
@@ -2097,6 +2116,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
 
     private void sortRestrictedEntries(List<RestrictedEntry> entries, int sortMode, boolean ascending) {
+        if (sortMode == SORT_RANDOM) {
+            Collections.shuffle(entries, new Random(shizukuRandomSeed));
+            return;
+        }
         Collections.sort(entries, new Comparator<RestrictedEntry>() {
             @Override
             public int compare(RestrictedEntry left, RestrictedEntry right) {
@@ -2104,9 +2127,9 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                     return left.directory ? -1 : 1;
                 }
                 int result;
-                if (sortMode == 1 && !left.directory) {
+                if (sortMode == SORT_SIZE && !left.directory) {
                     result = Long.compare(left.size, right.size);
-                } else if (sortMode == 2) {
+                } else if (sortMode == SORT_TIME) {
                     result = Long.compare(left.modifiedTime, right.modifiedTime);
                 } else {
                     result = left.name.toLowerCase(Locale.US).compareTo(right.name.toLowerCase(Locale.US));
