@@ -313,9 +313,6 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         } else {
             String lastPath = getPreferences().getString(KEY_LAST_PATH, "");
             pathInput.setText(lastPath);
-            if (!lastPath.isEmpty()) {
-                setPendingVideo(Uri.parse(lastPath), getPreferences().getInt(KEY_LAST_POSITION, 0), false);
-            }
         }
     }
 
@@ -1343,6 +1340,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             setPendingVideo(uri, seekMs, autoPlay);
             return;
         }
+        if ("shizuku".equals(uri.getScheme())) {
+            openShizukuVideoAsync(uri, seekMs, autoPlay);
+            return;
+        }
 
         loading.setVisibility(View.VISIBLE);
         releasePlayer();
@@ -1355,79 +1356,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         try {
             player.setAudioStreamType(AudioManager.STREAM_MUSIC);
             player.setSurface(surface);
-            if ("shizuku".equals(uri.getScheme())) {
-                String path = uri.getSchemeSpecificPart();
-                ParcelFileDescriptor descriptor = openFileDescriptorWithShizuku(path);
-                closeActiveShizukuFd();
-                activeShizukuFd = descriptor;
-                player.setDataSource(descriptor.getFileDescriptor());
-            } else {
-                player.setDataSource(this, uri);
-            }
-            player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
-                @Override
-                public void onPrepared(MediaPlayer mediaPlayer) {
-                    prepared = true;
-                    loading.setVisibility(View.GONE);
-                    videoWidth = mediaPlayer.getVideoWidth();
-                    videoHeight = mediaPlayer.getVideoHeight();
-                    titleText.setText(displayTitle(uri));
-                    int resumeMs = seekMs > 0 ? seekMs : savedVideoPosition(uri);
-                    if (resumeMs > 0) {
-                        mediaPlayer.seekTo(Math.min(resumeMs, mediaPlayer.getDuration()));
-                    }
-                    if (autoPlay) {
-                        mediaPlayer.start();
-                    }
-                    applyPlaybackSpeed();
-                    applyVideoTransform();
-                    updatePlayButton();
-                    updateProgress();
-                    revealControls();
-                }
-            });
-            player.setOnVideoSizeChangedListener(new MediaPlayer.OnVideoSizeChangedListener() {
-                @Override
-                public void onVideoSizeChanged(MediaPlayer mediaPlayer, int width, int height) {
-                    videoWidth = width;
-                    videoHeight = height;
-                    applyVideoTransform();
-                }
-            });
-            player.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
-                @Override
-                public void onCompletion(MediaPlayer mediaPlayer) {
-                    saveVideoPosition(uri, 0);
-                    updatePlayButton();
-                    if (playbackMode == PLAYBACK_MODE_ONE_LOOP) {
-                        mediaPlayer.seekTo(0);
-                        mediaPlayer.start();
-                        applyPlaybackSpeed();
-                        return;
-                    }
-                    if (playbackMode != PLAYBACK_MODE_SINGLE && switchPlaybackItem(1)) {
-                        return;
-                    }
-                    revealControls();
-                    showFeedback("播放完成");
-                }
-            });
-            player.setOnErrorListener(new MediaPlayer.OnErrorListener() {
-                @Override
-                public boolean onError(MediaPlayer mediaPlayer, int what, int extra) {
-                    Log.w(TAG, "MediaPlayer error what=" + what + " extra=" + extra + " uri=" + uri);
-                    loading.setVisibility(View.GONE);
-                    prepared = false;
-                    showFeedback(errorMessage(what, extra));
-                    return true;
-                }
-            });
+            player.setDataSource(this, uri);
+            attachPlayerListeners(uri, seekMs, autoPlay);
             player.prepareAsync();
-        } catch (IOException | IllegalArgumentException | SecurityException | RemoteException
-                | InterruptedException error) {
-            if (error instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
+        } catch (IOException | IllegalArgumentException | SecurityException error) {
             Log.w(TAG, "Failed to open video: " + uri, error);
             loading.setVisibility(View.GONE);
             releasePlayer();
@@ -1436,6 +1368,132 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             } else {
                 showFeedback(error instanceof SecurityException ? "没有文件访问权限" : "打开失败");
             }
+        }
+    }
+
+    private void attachPlayerListeners(Uri uri, int seekMs, boolean autoPlay) {
+        player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+            @Override
+            public void onPrepared(MediaPlayer mediaPlayer) {
+                prepared = true;
+                loading.setVisibility(View.GONE);
+                videoWidth = mediaPlayer.getVideoWidth();
+                videoHeight = mediaPlayer.getVideoHeight();
+                titleText.setText(displayTitle(uri));
+                int resumeMs = seekMs > 0 ? seekMs : savedVideoPosition(uri);
+                if (resumeMs > 0) {
+                    mediaPlayer.seekTo(Math.min(resumeMs, mediaPlayer.getDuration()));
+                }
+                if (autoPlay) {
+                    mediaPlayer.start();
+                }
+                applyPlaybackSpeed();
+                applyVideoTransform();
+                updatePlayButton();
+                updateProgress();
+                revealControls();
+            }
+        });
+        player.setOnVideoSizeChangedListener(new MediaPlayer.OnVideoSizeChangedListener() {
+            @Override
+            public void onVideoSizeChanged(MediaPlayer mediaPlayer, int width, int height) {
+                videoWidth = width;
+                videoHeight = height;
+                applyVideoTransform();
+            }
+        });
+        player.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+            @Override
+            public void onCompletion(MediaPlayer mediaPlayer) {
+                saveVideoPosition(uri, 0);
+                updatePlayButton();
+                if (playbackMode == PLAYBACK_MODE_ONE_LOOP) {
+                    mediaPlayer.seekTo(0);
+                    mediaPlayer.start();
+                    applyPlaybackSpeed();
+                    return;
+                }
+                if (playbackMode != PLAYBACK_MODE_SINGLE && switchPlaybackItem(1)) {
+                    return;
+                }
+                revealControls();
+                showFeedback("播放完成");
+            }
+        });
+        player.setOnErrorListener(new MediaPlayer.OnErrorListener() {
+            @Override
+            public boolean onError(MediaPlayer mediaPlayer, int what, int extra) {
+                Log.w(TAG, "MediaPlayer error what=" + what + " extra=" + extra + " uri=" + uri);
+                loading.setVisibility(View.GONE);
+                prepared = false;
+                showFeedback(errorMessage(what, extra));
+                return true;
+            }
+        });
+    }
+
+    private void openShizukuVideoAsync(Uri uri, int seekMs, boolean autoPlay) {
+        loading.setVisibility(View.VISIBLE);
+        releasePlayer();
+        currentUri = uri;
+        String path = uri.getSchemeSpecificPart();
+        ioExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    ParcelFileDescriptor descriptor = openFileDescriptorWithShizuku(path);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            prepareShizukuVideo(uri, descriptor, seekMs, autoPlay);
+                        }
+                    });
+                } catch (IOException | RemoteException | InterruptedException exception) {
+                    Log.w(TAG, "Failed to open Shizuku fd: " + path, exception);
+                    if (exception instanceof InterruptedException) {
+                        Thread.currentThread().interrupt();
+                    }
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            loading.setVisibility(View.GONE);
+                            releasePlayer();
+                            showFeedback(shizukuErrorMessage(exception));
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    private void prepareShizukuVideo(Uri uri, ParcelFileDescriptor descriptor, int seekMs, boolean autoPlay) {
+        if (!surfaceReady || surface == null) {
+            try {
+                descriptor.close();
+            } catch (IOException exception) {
+                Log.w(TAG, "Failed to close pending Shizuku fd", exception);
+            }
+            setPendingVideo(uri, seekMs, autoPlay);
+            return;
+        }
+        closeActiveShizukuFd();
+        activeShizukuFd = descriptor;
+        loading.setVisibility(View.VISIBLE);
+        player = new MediaPlayer();
+        prepared = false;
+        videoWidth = 0;
+        videoHeight = 0;
+        try {
+            player.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            player.setSurface(surface);
+            player.setDataSource(descriptor.getFileDescriptor());
+            attachPlayerListeners(uri, seekMs, autoPlay);
+            player.prepareAsync();
+        } catch (IOException | IllegalArgumentException | SecurityException error) {
+            Log.w(TAG, "Failed to prepare Shizuku video: " + uri, error);
+            loading.setVisibility(View.GONE);
+            releasePlayer();
+            showFeedback(error instanceof SecurityException ? "没有文件访问权限" : "打开失败");
         }
     }
 
@@ -2208,6 +2266,20 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             return;
         }
         Toast.makeText(this, "Shizuku 已授权", Toast.LENGTH_SHORT).show();
+    }
+
+    private String shizukuErrorMessage(Exception exception) {
+        String message = exception == null ? "" : exception.getMessage();
+        if (!isShizukuAvailable()) {
+            return "Shizuku 未运行";
+        }
+        if (!isShizukuGranted()) {
+            return "Shizuku 未授权";
+        }
+        if (message != null && message.toLowerCase(Locale.US).contains("timed out")) {
+            return "Shizuku 连接超时";
+        }
+        return "Shizuku 打开失败";
     }
 
     private void mountRestrictedPathAndPlay(String path) {
