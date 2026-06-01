@@ -79,6 +79,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private static final String ROOT_CACHE_DIR = "root-cache";
     private static final String ROOT_MOUNT_DIR = "root-mount";
     private static final int REQUEST_SHIZUKU_PERMISSION = 1003;
+    private static final long TAP_DELAY_MS = 260L;
+    private static final long LONG_PRESS_DELAY_MS = 420L;
     private static final String UPDATE_INFO_URL =
             "https://raw.githubusercontent.com/zhouhaoran-TJU/VibeReplay/main/dist/version.json";
     private static final String[] SPEED_LABELS = {"0.5x", "0.75x", "1x", "1.25x", "1.5x", "2x"};
@@ -104,6 +106,22 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         @Override
         public void run() {
             setControlsVisible(false);
+        }
+    };
+    private final Runnable singleTapRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!controlsLocked) {
+                setControlsVisible(!controlsVisible);
+            } else {
+                showFeedback("控制已锁定");
+            }
+        }
+    };
+    private final Runnable longPressRunnable = new Runnable() {
+        @Override
+        public void run() {
+            startLongPressSpeed();
         }
     };
     private final Shizuku.UserServiceArgs shizukuServiceArgs =
@@ -180,8 +198,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private int videoWidth;
     private int videoHeight;
     private float playbackSpeed = 1f;
+    private float speedBeforeLongPress = 1f;
     private long lastTapTime;
     private float lastTapX;
+    private boolean longPressActive;
+    private boolean longPressTriggered;
     private IRestrictedFileService restrictedFileService;
     private ParcelFileDescriptor activeShizukuFd;
     private String pendingShizukuPath;
@@ -342,7 +363,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         window.setStatusBarColor(Color.TRANSPARENT);
         window.setNavigationBarColor(Color.BLACK);
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        showSystemBars();
+        hideSystemBars();
     }
 
     private void restoreUiState(Bundle savedInstanceState) {
@@ -385,7 +406,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER));
 
-        centerPlayButton = makeCenterButton("播放");
+        centerPlayButton = makeCenterButton("▶");
         centerPlayButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -543,20 +564,20 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         });
         bottomBar.addView(seekBar, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(36)));
+                dp(46)));
 
         LinearLayout primaryRow = new LinearLayout(this);
         primaryRow.setGravity(Gravity.CENTER_VERTICAL);
         primaryRow.setOrientation(LinearLayout.HORIZONTAL);
 
-        playButton = makeButton("播放");
+        playButton = makeButton("▶");
         playButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 togglePlay();
             }
         });
-        primaryRow.addView(playButton, new LinearLayout.LayoutParams(dp(76), dp(42)));
+        primaryRow.addView(playButton, new LinearLayout.LayoutParams(dp(54), dp(42)));
 
         timeText = makeText(13, Color.rgb(220, 226, 235), false);
         timeText.setText("00:00 / 00:00");
@@ -637,29 +658,68 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         root.setOnTouchListener(new View.OnTouchListener() {
             @Override
             public boolean onTouch(View view, MotionEvent event) {
-                if (event.getAction() != MotionEvent.ACTION_UP) {
-                    return true;
+                if (isControlView(event)) {
+                    return false;
                 }
-
-                long now = System.currentTimeMillis();
-                boolean doubleTap = now - lastTapTime < 280L && Math.abs(event.getX() - lastTapX) < dp(80);
-                lastTapTime = now;
-                lastTapX = event.getX();
-
-                if (doubleTap) {
-                    if (event.getX() < root.getWidth() / 2f) {
-                        seekBy(-SEEK_STEP_MS);
-                    } else {
-                        seekBy(SEEK_STEP_MS);
-                    }
-                } else if (!controlsLocked) {
-                    setControlsVisible(!controlsVisible);
-                } else {
-                    showFeedback("控制已锁定");
+                switch (event.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        longPressTriggered = false;
+                        handler.postDelayed(longPressRunnable, LONG_PRESS_DELAY_MS);
+                        return true;
+                    case MotionEvent.ACTION_MOVE:
+                        return true;
+                    case MotionEvent.ACTION_CANCEL:
+                        handler.removeCallbacks(longPressRunnable);
+                        handler.removeCallbacks(singleTapRunnable);
+                        stopLongPressSpeed();
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                        handler.removeCallbacks(longPressRunnable);
+                        if (longPressTriggered) {
+                            stopLongPressSpeed();
+                            return true;
+                        }
+                        long now = System.currentTimeMillis();
+                        boolean doubleTap = now - lastTapTime < TAP_DELAY_MS
+                                && Math.abs(event.getX() - lastTapX) < dp(80);
+                        lastTapTime = now;
+                        lastTapX = event.getX();
+                        if (doubleTap) {
+                            handler.removeCallbacks(singleTapRunnable);
+                            if (event.getX() < root.getWidth() / 2f) {
+                                seekBy(-SEEK_STEP_MS);
+                            } else {
+                                seekBy(SEEK_STEP_MS);
+                            }
+                        } else {
+                            handler.postDelayed(singleTapRunnable, TAP_DELAY_MS);
+                        }
+                        return true;
+                    default:
+                        return true;
                 }
-                return true;
             }
         });
+    }
+
+    private boolean isControlView(MotionEvent event) {
+        return isPointInside(topBar, event.getX(), event.getY())
+                || isPointInside(bottomBar, event.getX(), event.getY())
+                || isPointInside(centerPlayButton, event.getX(), event.getY());
+    }
+
+    private boolean isPointInside(View target, float x, float y) {
+        if (target == null || target.getVisibility() != View.VISIBLE) {
+            return false;
+        }
+        int[] rootLocation = new int[2];
+        int[] targetLocation = new int[2];
+        root.getLocationOnScreen(rootLocation);
+        target.getLocationOnScreen(targetLocation);
+        float left = targetLocation[0] - rootLocation[0];
+        float top = targetLocation[1] - rootLocation[1];
+        return x >= left && x <= left + target.getWidth()
+                && y >= top && y <= top + target.getHeight();
     }
 
     private void showPrivacyNoticeIfNeeded() {
@@ -1428,8 +1488,45 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         int next = Math.max(0, Math.min(duration, player.getCurrentPosition() + deltaMs));
         player.seekTo(next);
         updateProgress();
-        revealControls();
         showFeedback(deltaMs > 0 ? "+10s" : "-10s");
+    }
+
+    private void startLongPressSpeed() {
+        if (player == null || !prepared || !player.isPlaying() || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return;
+        }
+        longPressTriggered = true;
+        if (!longPressActive) {
+            speedBeforeLongPress = playbackSpeed;
+            longPressActive = true;
+        }
+        applyTemporaryPlaybackSpeed(3f);
+        showFeedback("3×");
+    }
+
+    private void stopLongPressSpeed() {
+        if (!longPressActive) {
+            return;
+        }
+        longPressActive = false;
+        applyTemporaryPlaybackSpeed(speedBeforeLongPress);
+    }
+
+    private void applyTemporaryPlaybackSpeed(float speed) {
+        if (player == null || !prepared || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return;
+        }
+        boolean wasPlaying = player.isPlaying();
+        try {
+            PlaybackParams params = player.getPlaybackParams();
+            params.setSpeed(speed);
+            player.setPlaybackParams(params);
+            if (!wasPlaying) {
+                player.pause();
+            }
+        } catch (IllegalStateException | IllegalArgumentException exception) {
+            Log.w(TAG, "Temporary speed rejected: " + speed, exception);
+        }
     }
 
     private void applyPlaybackSpeed() {
@@ -1493,8 +1590,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             return;
         }
         boolean playing = player != null && prepared && player.isPlaying();
-        playButton.setText(playing ? "暂停" : "播放");
-        centerPlayButton.setText(playing ? "暂停" : "播放");
+        playButton.setText(playing ? "⏸" : "▶");
+        centerPlayButton.setText(playing ? "⏸" : "▶");
         centerPlayButton.setVisibility((controlsVisible || !playing) ? View.VISIBLE : View.GONE);
     }
 
@@ -1519,7 +1616,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         updatePlayButton();
         if (visible) {
             scheduleControlsHide();
-            showSystemBars();
+            hideSystemBars();
         } else {
             hideSystemBars();
         }
