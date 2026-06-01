@@ -255,6 +255,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private IRestrictedFileService restrictedFileService;
     private ParcelFileDescriptor activeShizukuFd;
     private String pendingShizukuPath;
+    private AlertDialog shizukuBrowserDialog;
     private final List<PlaybackItem> playbackQueue = new ArrayList<>();
     private int currentQueueIndex = -1;
 
@@ -346,6 +347,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         }
         closeActiveShizukuFd();
         unbindShizukuService();
+        dismissShizukuBrowserDialog();
         Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener);
         ioExecutor.shutdownNow();
         super.onDestroy();
@@ -1376,6 +1378,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
 
     private void showShizukuDirectoryDialog(String path, String[] rawEntries, boolean sortBySize) {
+        dismissShizukuBrowserDialog();
         shizukuSortMode = sortBySize ? 1 : shizukuSortMode;
         previewGeneration++;
         int generation = previewGeneration;
@@ -1400,8 +1403,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         listView.setOnItemClickListener((parent, view, which, id) -> {
             RestrictedEntry entry = entries.get(which);
             if (entry.directory) {
+                dismissShizukuBrowserDialog();
                 showShizukuDirectory(entry.path);
             } else {
+                dismissShizukuBrowserDialog();
                 openShizukuEntryFromDirectory(entries, entry);
             }
         });
@@ -1413,7 +1418,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             showShizukuFileActions(path, rawEntries, sortBySize, entries, entry);
             return true;
         });
-        new AlertDialog.Builder(this)
+        shizukuBrowserDialog = new AlertDialog.Builder(this)
                 .setTitle(shizukuTitle(path))
                 .setView(listView)
                 .setPositiveButton(nextSortLabel(), (dialog, which) -> {
@@ -1426,7 +1431,24 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                     showShizukuDirectoryDialog(path, rawEntries, shizukuSortMode == 1);
                 })
                 .setNegativeButton("取消", null)
-                .show();
+                .create();
+        shizukuBrowserDialog.setOnDismissListener(dialog -> {
+            if (shizukuBrowserDialog == dialog) {
+                shizukuBrowserDialog = null;
+            }
+        });
+        shizukuBrowserDialog.show();
+    }
+
+    private void dismissShizukuBrowserDialog() {
+        if (shizukuBrowserDialog == null) {
+            return;
+        }
+        AlertDialog dialog = shizukuBrowserDialog;
+        shizukuBrowserDialog = null;
+        if (dialog.isShowing()) {
+            dialog.dismiss();
+        }
     }
 
     private void openShizukuEntryFromDirectory(List<RestrictedEntry> entries, RestrictedEntry selected) {
@@ -1451,6 +1473,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 .setTitle(entry.name)
                 .setItems(new CharSequence[]{"播放", "删除文件"}, (dialog, which) -> {
                     if (which == 0) {
+                        dialog.dismiss();
+                        dismissShizukuBrowserDialog();
                         openShizukuEntryFromDirectory(entries, entry);
                     } else {
                         confirmDeleteShizukuFile(directoryPath, rawEntries, sortBySize, entry);
