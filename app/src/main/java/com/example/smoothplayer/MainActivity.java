@@ -219,6 +219,13 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private TextView timeText;
     private TextView titleText;
     private TextView feedbackText;
+    private FrameLayout shizukuBrowserOverlay;
+    private TextView browserPathText;
+    private ListView browserListView;
+    private TextView browserEmptyText;
+    private Button browserSortButton;
+    private Button browserDirectionButton;
+    private Button browserFilterButton;
     private ProgressBar loading;
     private Spinner speedSpinner;
 
@@ -256,7 +263,9 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private IRestrictedFileService restrictedFileService;
     private ParcelFileDescriptor activeShizukuFd;
     private String pendingShizukuPath;
-    private AlertDialog shizukuBrowserDialog;
+    private String currentBrowserPath;
+    private String[] currentBrowserRawEntries;
+    private boolean browserVisible;
     private final List<PlaybackItem> playbackQueue = new ArrayList<>();
     private int currentQueueIndex = -1;
 
@@ -348,10 +357,19 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         }
         closeActiveShizukuFd();
         unbindShizukuService();
-        dismissShizukuBrowserDialog();
+        hideShizukuBrowser();
         Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener);
         ioExecutor.shutdownNow();
         super.onDestroy();
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (browserVisible) {
+            hideShizukuBrowser();
+            return;
+        }
+        super.onBackPressed();
     }
 
     @Override
@@ -475,6 +493,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
 
         buildTopBar();
         buildBottomBar();
+        buildShizukuBrowserOverlay();
         bindGestures();
         setSpeedSpinnerSelection(playbackSpeed);
         setControlsVisible(true);
@@ -495,36 +514,16 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         titleRow.addView(titleText, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        Button updateButton = makeButton("更新");
-        updateButton.setOnClickListener(new View.OnClickListener() {
+        Button moreButton = makeButton("更多");
+        moreButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                checkForUpdates(true);
+                showMoreOptions();
             }
         });
-        LinearLayout.LayoutParams updateParams = new LinearLayout.LayoutParams(dp(64), dp(36));
-        updateParams.leftMargin = dp(8);
-        titleRow.addView(updateButton, updateParams);
-        Button deleteButton = makeButton("删除");
-        deleteButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                confirmDeleteCurrentFile();
-            }
-        });
-        LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(dp(64), dp(36));
-        deleteParams.leftMargin = dp(8);
-        titleRow.addView(deleteButton, deleteParams);
-        Button filesButton = makeButton("权限");
-        filesButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                showAccessOptions();
-            }
-        });
-        LinearLayout.LayoutParams filesParams = new LinearLayout.LayoutParams(dp(64), dp(36));
-        filesParams.leftMargin = dp(8);
-        titleRow.addView(filesButton, filesParams);
+        LinearLayout.LayoutParams moreParams = new LinearLayout.LayoutParams(dp(72), dp(36));
+        moreParams.leftMargin = dp(8);
+        titleRow.addView(moreButton, moreParams);
         topBar.addView(titleRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -557,27 +556,16 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         openParams.leftMargin = dp(8);
         pathRow.addView(openButton, openParams);
 
-        Button systemPickButton = makeButton("系统");
-        systemPickButton.setOnClickListener(new View.OnClickListener() {
+        Button browseButton = makeButton("浏览");
+        browseButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                pickVideo();
+                showBrowseOptions();
             }
         });
-        LinearLayout.LayoutParams pickParams = new LinearLayout.LayoutParams(dp(64), dp(42));
-        pickParams.leftMargin = dp(8);
-        pathRow.addView(systemPickButton, pickParams);
-
-        Button shizukuPickButton = makeButton("Shizuku");
-        shizukuPickButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                showShizukuPickOptions();
-            }
-        });
-        LinearLayout.LayoutParams shizukuParams = new LinearLayout.LayoutParams(dp(82), dp(42));
-        shizukuParams.leftMargin = dp(8);
-        pathRow.addView(shizukuPickButton, shizukuParams);
+        LinearLayout.LayoutParams browseParams = new LinearLayout.LayoutParams(dp(72), dp(42));
+        browseParams.leftMargin = dp(8);
+        pathRow.addView(browseButton, browseParams);
 
         topBar.addView(pathRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -589,6 +577,35 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 Gravity.TOP);
         topParams.setMargins(dp(12), dp(12), dp(12), 0);
         root.addView(topBar, topParams);
+    }
+
+    private void showMoreOptions() {
+        new AlertDialog.Builder(this)
+                .setTitle("更多")
+                .setItems(new CharSequence[]{"删除当前文件", "检查更新", "文件访问权限"},
+                        (dialog, which) -> {
+                            if (which == 0) {
+                                confirmDeleteCurrentFile();
+                            } else if (which == 1) {
+                                checkForUpdates(true);
+                            } else {
+                                showAccessOptions();
+                            }
+                        })
+                .show();
+    }
+
+    private void showBrowseOptions() {
+        new AlertDialog.Builder(this)
+                .setTitle("浏览")
+                .setItems(new CharSequence[]{"Shizuku 浏览", "系统浏览"}, (dialog, which) -> {
+                    if (which == 0) {
+                        showShizukuPickOptions();
+                    } else {
+                        pickVideo();
+                    }
+                })
+                .show();
     }
 
     private void buildBottomBar() {
@@ -757,6 +774,102 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         root.addView(bottomBar, bottomParams);
     }
 
+    private void buildShizukuBrowserOverlay() {
+        shizukuBrowserOverlay = new FrameLayout(this);
+        shizukuBrowserOverlay.setBackgroundColor(Color.rgb(8, 11, 15));
+        shizukuBrowserOverlay.setVisibility(View.GONE);
+
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setPadding(dp(12), dp(12), dp(12), dp(12));
+        shizukuBrowserOverlay.addView(page, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+
+        LinearLayout topRow = new LinearLayout(this);
+        topRow.setGravity(Gravity.CENTER_VERTICAL);
+        topRow.setOrientation(LinearLayout.HORIZONTAL);
+        Button closeButton = makeButton("返回");
+        closeButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                hideShizukuBrowser();
+            }
+        });
+        topRow.addView(closeButton, new LinearLayout.LayoutParams(dp(64), dp(40)));
+
+        browserPathText = makeText(14, Color.WHITE, true);
+        browserPathText.setSingleLine(true);
+        LinearLayout.LayoutParams pathParams = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        pathParams.leftMargin = dp(10);
+        topRow.addView(browserPathText, pathParams);
+        page.addView(topRow, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout toolRow = new LinearLayout(this);
+        toolRow.setGravity(Gravity.CENTER_VERTICAL);
+        toolRow.setOrientation(LinearLayout.HORIZONTAL);
+        toolRow.setPadding(0, dp(10), 0, dp(8));
+
+        browserSortButton = makeButton("名称");
+        browserSortButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                showSortModeMenu();
+            }
+        });
+        toolRow.addView(browserSortButton, new LinearLayout.LayoutParams(0, dp(40), 1f));
+
+        browserDirectionButton = makeButton("正序");
+        browserDirectionButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                shizukuSortAscending = !shizukuSortAscending;
+                refreshCurrentBrowserEntries();
+            }
+        });
+        LinearLayout.LayoutParams directionParams = new LinearLayout.LayoutParams(0, dp(40), 1f);
+        directionParams.leftMargin = dp(8);
+        toolRow.addView(browserDirectionButton, directionParams);
+
+        browserFilterButton = makeButton(videoOnlyBrowsing ? "仅视频" : "全部");
+        browserFilterButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                videoOnlyBrowsing = !videoOnlyBrowsing;
+                getPreferences().edit().putBoolean(KEY_VIDEO_ONLY, videoOnlyBrowsing).apply();
+                refreshCurrentBrowserEntries();
+            }
+        });
+        LinearLayout.LayoutParams filterParams = new LinearLayout.LayoutParams(0, dp(40), 1f);
+        filterParams.leftMargin = dp(8);
+        toolRow.addView(browserFilterButton, filterParams);
+        page.addView(toolRow, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        browserEmptyText = makeText(14, Color.rgb(174, 183, 194), false);
+        browserEmptyText.setGravity(Gravity.CENTER);
+        browserEmptyText.setText("没有可显示的文件");
+        browserEmptyText.setVisibility(View.GONE);
+        page.addView(browserEmptyText, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(44)));
+
+        browserListView = new ListView(this);
+        browserListView.setDividerHeight(0);
+        page.addView(browserListView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f));
+
+        root.addView(shizukuBrowserOverlay, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+    }
+
     private void bindGestures() {
         root.setOnTouchListener(new View.OnTouchListener() {
             @Override
@@ -830,6 +943,9 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
 
     private boolean isControlView(MotionEvent event) {
+        if (browserVisible) {
+            return true;
+        }
         return isPointInside(topBar, event.getX(), event.getY())
                 || isPointInside(bottomBar, event.getX(), event.getY())
                 || isPointInside(centerPlayButton, event.getX(), event.getY());
@@ -1379,16 +1495,25 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
 
     private void showShizukuDirectoryDialog(String path, String[] rawEntries, boolean sortBySize) {
-        dismissShizukuBrowserDialog();
         shizukuSortMode = sortBySize ? 1 : shizukuSortMode;
+        currentBrowserPath = path;
+        currentBrowserRawEntries = rawEntries;
+        showShizukuBrowser();
+        refreshCurrentBrowserEntries();
+    }
+
+    private void refreshCurrentBrowserEntries() {
+        if (currentBrowserPath == null || currentBrowserRawEntries == null || browserListView == null) {
+            return;
+        }
         previewGeneration++;
         int generation = previewGeneration;
         List<RestrictedEntry> entries = new ArrayList<>();
-        if (!"/sdcard".equals(path)) {
-            entries.add(new RestrictedEntry(true, 0L, 0L, "..", parentPath(path)));
+        if (!"/sdcard".equals(currentBrowserPath)) {
+            entries.add(new RestrictedEntry(true, 0L, 0L, "..", parentPath(currentBrowserPath)));
         }
         List<RestrictedEntry> children = new ArrayList<>();
-        for (String rawEntry : rawEntries) {
+        for (String rawEntry : currentBrowserRawEntries) {
             RestrictedEntry entry = RestrictedEntry.parse(rawEntry);
             if (entry != null) {
                 if (!videoOnlyBrowsing || entry.directory || entry.looksLikeVideo()) {
@@ -1398,61 +1523,73 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         }
         sortRestrictedEntries(children, shizukuSortMode, shizukuSortAscending);
         entries.addAll(children);
-        ListView listView = new ListView(this);
         RestrictedEntryAdapter adapter = new RestrictedEntryAdapter(entries, generation);
-        listView.setAdapter(adapter);
-        listView.setOnItemClickListener((parent, view, which, id) -> {
+        browserListView.setAdapter(adapter);
+        browserListView.setOnItemClickListener((parent, view, which, id) -> {
             RestrictedEntry entry = entries.get(which);
             if (entry.directory) {
-                dismissShizukuBrowserDialog();
                 showShizukuDirectory(entry.path);
             } else {
-                dismissShizukuBrowserDialog();
+                hideShizukuBrowser();
                 openShizukuEntryFromDirectory(entries, entry);
             }
         });
-        listView.setOnItemLongClickListener((parent, view, which, id) -> {
+        browserListView.setOnItemLongClickListener((parent, view, which, id) -> {
             RestrictedEntry entry = entries.get(which);
             if (entry.directory) {
                 return false;
             }
-            showShizukuFileActions(path, rawEntries, sortBySize, entries, entry);
+            showShizukuFileActions(currentBrowserPath, currentBrowserRawEntries, shizukuSortMode == 1,
+                    entries, entry);
             return true;
         });
-        shizukuBrowserDialog = new AlertDialog.Builder(this)
-                .setTitle(shizukuTitle(path))
-                .setView(listView)
-                .setPositiveButton(nextSortLabel(), (dialog, which) -> {
-                    shizukuSortMode = (shizukuSortMode + 1) % 3;
-                    showShizukuDirectoryDialog(path, rawEntries, shizukuSortMode == 1);
-                })
-                .setNeutralButton(videoOnlyBrowsing ? "全部文件" : "仅视频", (dialog, which) -> {
-                    videoOnlyBrowsing = !videoOnlyBrowsing;
-                    getPreferences().edit().putBoolean(KEY_VIDEO_ONLY, videoOnlyBrowsing).apply();
-                    showShizukuDirectoryDialog(path, rawEntries, shizukuSortMode == 1);
-                })
-                .setNegativeButton(shizukuSortAscending ? "倒序" : "正序", (dialog, which) -> {
-                    shizukuSortAscending = !shizukuSortAscending;
-                    showShizukuDirectoryDialog(path, rawEntries, shizukuSortMode == 1);
-                })
-                .create();
-        shizukuBrowserDialog.setOnDismissListener(dialog -> {
-            if (shizukuBrowserDialog == dialog) {
-                shizukuBrowserDialog = null;
-            }
-        });
-        shizukuBrowserDialog.show();
+        browserEmptyText.setVisibility(entries.size() <= 1 ? View.VISIBLE : View.GONE);
+        updateBrowserToolbar();
     }
 
-    private void dismissShizukuBrowserDialog() {
-        if (shizukuBrowserDialog == null) {
-            return;
+    private void showShizukuBrowser() {
+        browserVisible = true;
+        if (shizukuBrowserOverlay != null) {
+            shizukuBrowserOverlay.setVisibility(View.VISIBLE);
         }
-        AlertDialog dialog = shizukuBrowserDialog;
-        shizukuBrowserDialog = null;
-        if (dialog.isShowing()) {
-            dialog.dismiss();
+        setControlsVisible(false);
+        hideSystemBars();
+    }
+
+    private void hideShizukuBrowser() {
+        browserVisible = false;
+        currentBrowserPath = null;
+        currentBrowserRawEntries = null;
+        if (shizukuBrowserOverlay != null) {
+            shizukuBrowserOverlay.setVisibility(View.GONE);
         }
+        previewGeneration++;
+        setControlsVisible(true);
+    }
+
+    private void updateBrowserToolbar() {
+        if (browserPathText != null) {
+            browserPathText.setText(shizukuTitle(currentBrowserPath));
+        }
+        if (browserSortButton != null) {
+            browserSortButton.setText(currentSortName());
+        }
+        if (browserDirectionButton != null) {
+            browserDirectionButton.setText(shizukuSortAscending ? "正序" : "倒序");
+        }
+        if (browserFilterButton != null) {
+            browserFilterButton.setText(videoOnlyBrowsing ? "仅视频" : "全部");
+        }
+    }
+
+    private void showSortModeMenu() {
+        new AlertDialog.Builder(this)
+                .setTitle("排序")
+                .setItems(new CharSequence[]{"名称", "大小", "时间"}, (dialog, which) -> {
+                    shizukuSortMode = which;
+                    refreshCurrentBrowserEntries();
+                })
+                .show();
     }
 
     private void openShizukuEntryFromDirectory(List<RestrictedEntry> entries, RestrictedEntry selected) {
@@ -1478,7 +1615,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 .setItems(new CharSequence[]{"播放", "删除文件"}, (dialog, which) -> {
                     if (which == 0) {
                         dialog.dismiss();
-                        dismissShizukuBrowserDialog();
+                        hideShizukuBrowser();
                         openShizukuEntryFromDirectory(entries, entry);
                     } else {
                         confirmDeleteShizukuFile(directoryPath, rawEntries, sortBySize, entry);
@@ -1707,6 +1844,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
 
     private String shizukuTitle(String path) {
+        return currentSortName() + (shizukuSortAscending ? "正序 " : "倒序 ") + breadcrumbPath(path);
+    }
+
+    private String currentSortName() {
         String sortName;
         if (shizukuSortMode == 1) {
             sortName = "大小";
@@ -1715,17 +1856,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         } else {
             sortName = "名称";
         }
-        return sortName + (shizukuSortAscending ? "正序 " : "倒序 ") + breadcrumbPath(path);
-    }
-
-    private String nextSortLabel() {
-        if (shizukuSortMode == 0) {
-            return "按大小";
-        }
-        if (shizukuSortMode == 1) {
-            return "按时间";
-        }
-        return "按名称";
+        return sortName;
     }
 
     private String breadcrumbPath(String path) {
@@ -2766,7 +2897,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
 
             RestrictedEntry entry = getItem(position);
             holder.name.setText(entry.name);
-            holder.meta.setText(entry.directory ? "目录" : entry.readableSize());
+            holder.meta.setText(entry.directory ? "目录" : entry.readableMeta());
             if (entry.directory) {
                 holder.preview.setImageBitmap(null);
                 holder.preview.setBackgroundColor(Color.rgb(24, 35, 46));
@@ -2883,6 +3014,15 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 unitIndex++;
             }
             return String.format(Locale.US, "%.1f %s", value, units[unitIndex]);
+        }
+
+        String readableMeta() {
+            String meta = readableSize();
+            if (modifiedTime > 0L) {
+                meta += "  " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+                        .format(new java.util.Date(modifiedTime));
+            }
+            return meta;
         }
 
         boolean looksLikeVideo() {
