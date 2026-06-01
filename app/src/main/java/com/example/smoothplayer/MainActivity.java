@@ -154,6 +154,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private LinearLayout bottomBar;
     private EditText pathInput;
     private Button playButton;
+    private Button centerPlayButton;
     private Button fitButton;
     private Button lockButton;
     private SeekBar seekBar;
@@ -384,6 +385,16 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER));
 
+        centerPlayButton = makeCenterButton("播放");
+        centerPlayButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                togglePlay();
+            }
+        });
+        FrameLayout.LayoutParams centerParams = new FrameLayout.LayoutParams(dp(104), dp(104), Gravity.CENTER);
+        root.addView(centerPlayButton, centerParams);
+
         buildTopBar();
         buildBottomBar();
         bindGestures();
@@ -394,13 +405,13 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private void buildTopBar() {
         topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.VERTICAL);
-        topBar.setPadding(dp(16), dp(12), dp(16), dp(12));
+        topBar.setPadding(dp(14), dp(10), dp(14), dp(12));
         topBar.setBackgroundResource(R.drawable.bg_panel);
 
         LinearLayout titleRow = new LinearLayout(this);
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
         titleRow.setOrientation(LinearLayout.HORIZONTAL);
-        titleText = makeText(16, Color.WHITE, true);
+        titleText = makeText(15, Color.WHITE, true);
         titleText.setText("Smooth Player");
         titleText.setSingleLine(true);
         titleRow.addView(titleText, new LinearLayout.LayoutParams(0,
@@ -413,7 +424,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 checkForUpdates(true);
             }
         });
-        LinearLayout.LayoutParams updateParams = new LinearLayout.LayoutParams(dp(72), dp(38));
+        LinearLayout.LayoutParams updateParams = new LinearLayout.LayoutParams(dp(64), dp(36));
         updateParams.leftMargin = dp(8);
         titleRow.addView(updateButton, updateParams);
         Button filesButton = makeButton("权限");
@@ -423,7 +434,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 showAccessOptions();
             }
         });
-        LinearLayout.LayoutParams filesParams = new LinearLayout.LayoutParams(dp(72), dp(38));
+        LinearLayout.LayoutParams filesParams = new LinearLayout.LayoutParams(dp(64), dp(36));
         filesParams.leftMargin = dp(8);
         titleRow.addView(filesButton, filesParams);
         topBar.addView(titleRow, new LinearLayout.LayoutParams(
@@ -440,7 +451,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         pathInput.setTextColor(Color.WHITE);
         pathInput.setHintTextColor(Color.rgb(150, 162, 176));
         pathInput.setTextSize(14);
-        pathInput.setHint("优先选择文件，或输入 content:// / file://");
+        pathInput.setHint("输入路径或选择文件");
         pathInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         pathInput.setSelectAllOnFocus(false);
         pathInput.setBackgroundColor(Color.argb(36, 255, 255, 255));
@@ -458,16 +469,27 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         openParams.leftMargin = dp(8);
         pathRow.addView(openButton, openParams);
 
-        Button pickButton = makeButton("选择");
-        pickButton.setOnClickListener(new View.OnClickListener() {
+        Button systemPickButton = makeButton("系统");
+        systemPickButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                showPickOptions();
+                pickVideo();
             }
         });
-        LinearLayout.LayoutParams pickParams = new LinearLayout.LayoutParams(dp(72), dp(42));
+        LinearLayout.LayoutParams pickParams = new LinearLayout.LayoutParams(dp(64), dp(42));
         pickParams.leftMargin = dp(8);
-        pathRow.addView(pickButton, pickParams);
+        pathRow.addView(systemPickButton, pickParams);
+
+        Button shizukuPickButton = makeButton("Shizuku");
+        shizukuPickButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                showShizukuPickOptions();
+            }
+        });
+        LinearLayout.LayoutParams shizukuParams = new LinearLayout.LayoutParams(dp(82), dp(42));
+        shizukuParams.leftMargin = dp(8);
+        pathRow.addView(shizukuPickButton, shizukuParams);
 
         topBar.addView(pathRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -484,7 +506,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private void buildBottomBar() {
         bottomBar = new LinearLayout(this);
         bottomBar.setOrientation(LinearLayout.VERTICAL);
-        bottomBar.setPadding(dp(14), dp(12), dp(14), dp(12));
+        bottomBar.setPadding(dp(14), dp(10), dp(14), dp(10));
         bottomBar.setBackgroundResource(R.drawable.bg_panel);
 
         seekBar = new SeekBar(this);
@@ -549,7 +571,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         LinearLayout optionsRow = new LinearLayout(this);
         optionsRow.setGravity(Gravity.CENTER_VERTICAL);
         optionsRow.setOrientation(LinearLayout.HORIZONTAL);
-        optionsRow.setPadding(0, dp(8), 0, 0);
+        optionsRow.setPadding(0, dp(6), 0, 0);
 
         speedSpinner = new Spinner(this, Spinner.MODE_DROPDOWN);
         ArrayAdapter<String> adapter = new ArrayAdapter<String>(
@@ -784,17 +806,17 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         openVideo(uri, 0, true);
     }
 
-    private void showPickOptions() {
+    private void showShizukuPickOptions() {
         new AlertDialog.Builder(this)
-                .setTitle("选择文件")
-                .setItems(new CharSequence[]{"系统文件浏览", "Shizuku 浏览 Android/data", "Shizuku 浏览 Android/obb"},
+                .setTitle("Shizuku 浏览")
+                .setItems(new CharSequence[]{"Android/data", "Android/obb", "存储根目录"},
                         (dialog, which) -> {
                             if (which == 0) {
-                                pickVideo();
-                            } else if (which == 1) {
                                 browseRestrictedDirectory("/sdcard/Android/data");
-                            } else {
+                            } else if (which == 1) {
                                 browseRestrictedDirectory("/sdcard/Android/obb");
+                            } else {
+                                browseRestrictedDirectory("/sdcard");
                             }
                         })
                 .show();
@@ -1467,11 +1489,13 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
 
     private void updatePlayButton() {
-        if (playButton == null) {
+        if (playButton == null || centerPlayButton == null) {
             return;
         }
         boolean playing = player != null && prepared && player.isPlaying();
         playButton.setText(playing ? "暂停" : "播放");
+        centerPlayButton.setText(playing ? "暂停" : "播放");
+        centerPlayButton.setVisibility((controlsVisible || !playing) ? View.VISIBLE : View.GONE);
     }
 
     private void revealControls() {
@@ -1492,6 +1516,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         topBar.setVisibility(visibility);
         bottomBar.setVisibility(visibility);
         dimLayer.setVisibility(visible ? View.VISIBLE : View.GONE);
+        updatePlayButton();
         if (visible) {
             scheduleControlsHide();
             showSystemBars();
@@ -1762,6 +1787,14 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             textView.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         }
         return textView;
+    }
+
+    private Button makeCenterButton(String text) {
+        Button button = makeButton(text);
+        button.setTextSize(18);
+        button.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        button.setBackgroundResource(R.drawable.bg_center_button);
+        return button;
     }
 
     private Button makeButton(String text) {

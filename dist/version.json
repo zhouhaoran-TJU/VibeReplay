@@ -1,6 +1,6 @@
 {
-  "versionCode": 6,
-  "versionName": "1.5-beta",
+  "versionCode": 7,
+  "versionName": "1.6-beta",
   "apkUrl": "https://github.com/zhouhaoran-TJU/VibeReplay/raw/main/dist/SmoothPlayer-beta.apk",
-  "notes": "新增应用内 Shizuku 文件浏览器，可直接浏览 Android/data 与 Android/obb 并用 Shizuku fd 播放选中文件。"
+  "notes": "拆分系统浏览与 Shizuku 浏览入口，单击隐藏控制层时保持视频大小不变，并新增居中播放/暂停按钮与更清爽的播放器 UI。"
 }
