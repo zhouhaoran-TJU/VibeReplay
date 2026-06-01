@@ -93,12 +93,25 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private static final String KEY_LAST_POSITION = "last_position";
     private static final String KEY_LAST_SPEED = "last_speed";
     private static final String KEY_LAST_FILL = "last_fill";
+    private static final String KEY_VIDEO_SCALE_MODE = "video_scale_mode";
     private static final String KEY_PRIVACY_ACCEPTED = "privacy_accepted";
     private static final String KEY_AUTO_NEXT = "auto_next";
+    private static final String KEY_PLAYBACK_MODE = "playback_mode";
     private static final String KEY_VIDEO_ONLY = "video_only";
     private static final String ROOT_CACHE_DIR = "root-cache";
     private static final String ROOT_MOUNT_DIR = "root-mount";
     private static final int PREVIEW_CACHE_LIMIT = 80;
+    private static final int PLAYBACK_MODE_SINGLE = 0;
+    private static final int PLAYBACK_MODE_SEQUENCE = 1;
+    private static final int PLAYBACK_MODE_LIST_LOOP = 2;
+    private static final int PLAYBACK_MODE_ONE_LOOP = 3;
+    private static final int SCALE_MODE_FIT = 0;
+    private static final int SCALE_MODE_FILL = 1;
+    private static final int SCALE_MODE_STRETCH = 2;
+    private static final int SCALE_MODE_ORIGINAL = 3;
+    private static final int GESTURE_NONE = 0;
+    private static final int GESTURE_VOLUME = 1;
+    private static final int GESTURE_BRIGHTNESS = 2;
     private static final int REQUEST_SHIZUKU_PERMISSION = 1003;
     private static final long TAP_DELAY_MS = 260L;
     private static final long LONG_PRESS_DELAY_MS = 420L;
@@ -242,6 +255,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private boolean controlsLocked;
     private boolean fillMode;
     private boolean autoNext = true;
+    private int playbackMode = PLAYBACK_MODE_SEQUENCE;
+    private int videoScaleMode = SCALE_MODE_FIT;
     private boolean videoOnlyBrowsing = true;
     private int shizukuSortMode;
     private boolean shizukuSortAscending = true;
@@ -257,6 +272,9 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private float touchDownY;
     private long touchDownTime;
     private boolean touchMoved;
+    private int activeVerticalGesture;
+    private float gestureStartBrightness = -1f;
+    private int gestureStartVolume;
     private boolean longPressActive;
     private boolean longPressTriggered;
     private int tapCount;
@@ -446,6 +464,9 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         fillMode = savedInstanceState == null ? prefs.getBoolean(KEY_LAST_FILL, false)
                 : savedInstanceState.getBoolean(KEY_LAST_FILL, false);
         autoNext = prefs.getBoolean(KEY_AUTO_NEXT, true);
+        playbackMode = prefs.getInt(KEY_PLAYBACK_MODE, autoNext ? PLAYBACK_MODE_SEQUENCE : PLAYBACK_MODE_SINGLE);
+        videoScaleMode = prefs.getInt(KEY_VIDEO_SCALE_MODE, fillMode ? SCALE_MODE_FILL : SCALE_MODE_FIT);
+        fillMode = videoScaleMode == SCALE_MODE_FILL;
         videoOnlyBrowsing = prefs.getBoolean(KEY_VIDEO_ONLY, true);
     }
 
@@ -608,6 +629,65 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 .show();
     }
 
+    private void showScaleModeMenu() {
+        new AlertDialog.Builder(this)
+                .setTitle("画面模式")
+                .setItems(new CharSequence[]{"适配", "填充", "拉伸", "原始"}, (dialog, which) -> {
+                    videoScaleMode = which;
+                    fillMode = videoScaleMode == SCALE_MODE_FILL;
+                    getPreferences().edit()
+                            .putInt(KEY_VIDEO_SCALE_MODE, videoScaleMode)
+                            .putBoolean(KEY_LAST_FILL, fillMode)
+                            .apply();
+                    fitButton.setText(scaleModeLabel());
+                    applyVideoTransform();
+                    revealControls();
+                })
+                .show();
+    }
+
+    private String scaleModeLabel() {
+        if (videoScaleMode == SCALE_MODE_FILL) {
+            return "填充";
+        }
+        if (videoScaleMode == SCALE_MODE_STRETCH) {
+            return "拉伸";
+        }
+        if (videoScaleMode == SCALE_MODE_ORIGINAL) {
+            return "原始";
+        }
+        return "适配";
+    }
+
+    private void showPlaybackModeMenu() {
+        new AlertDialog.Builder(this)
+                .setTitle("播放模式")
+                .setItems(new CharSequence[]{"单集", "顺序", "列表循环", "单集循环"}, (dialog, which) -> {
+                    playbackMode = which;
+                    autoNext = playbackMode != PLAYBACK_MODE_SINGLE;
+                    getPreferences().edit()
+                            .putInt(KEY_PLAYBACK_MODE, playbackMode)
+                            .putBoolean(KEY_AUTO_NEXT, autoNext)
+                            .apply();
+                    autoNextButton.setText(playbackModeLabel());
+                    revealControls();
+                })
+                .show();
+    }
+
+    private String playbackModeLabel() {
+        if (playbackMode == PLAYBACK_MODE_ONE_LOOP) {
+            return "单循";
+        }
+        if (playbackMode == PLAYBACK_MODE_LIST_LOOP) {
+            return "循环";
+        }
+        if (playbackMode == PLAYBACK_MODE_SEQUENCE) {
+            return "顺序";
+        }
+        return "单集";
+    }
+
     private void buildBottomBar() {
         bottomBar = new LinearLayout(this);
         bottomBar.setOrientation(LinearLayout.VERTICAL);
@@ -627,6 +707,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 if (fromUser && prepared && player != null) {
                     int target = (int) (player.getDuration() * (progress / 1000f));
                     timeText.setText(formatTime(target) + " / " + formatTime(player.getDuration()));
+                    showFeedback(formatTime(target));
                 }
             }
 
@@ -641,6 +722,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 if (prepared && player != null) {
                     int target = (int) (player.getDuration() * (bar.getProgress() / 1000f));
                     player.seekTo(target);
+                    saveVideoPosition(currentUri, target);
+                    showFeedback(formatTime(target));
                 }
                 userSeeking = false;
                 scheduleControlsHide();
@@ -685,6 +768,17 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         nextParams.leftMargin = dp(8);
         primaryRow.addView(nextButton, nextParams);
 
+        Button restartButton = makeButton("从头");
+        restartButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                restartCurrentVideo();
+            }
+        });
+        LinearLayout.LayoutParams restartParams = new LinearLayout.LayoutParams(dp(58), dp(42));
+        restartParams.leftMargin = dp(8);
+        primaryRow.addView(restartButton, restartParams);
+
         timeText = makeText(13, Color.rgb(220, 226, 235), false);
         timeText.setText("00:00 / 00:00");
         LinearLayout.LayoutParams timeParams = new LinearLayout.LayoutParams(0,
@@ -721,15 +815,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         });
         optionsRow.addView(speedSpinner, new LinearLayout.LayoutParams(0, dp(42), 1f));
 
-        fitButton = makeButton(fillMode ? "填充" : "适配");
+        fitButton = makeButton(scaleModeLabel());
         fitButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                fillMode = !fillMode;
-                fitButton.setText(fillMode ? "填充" : "适配");
-                getPreferences().edit().putBoolean(KEY_LAST_FILL, fillMode).apply();
-                applyVideoTransform();
-                revealControls();
+                showScaleModeMenu();
             }
         });
         LinearLayout.LayoutParams fitParams = new LinearLayout.LayoutParams(dp(72), dp(42));
@@ -749,14 +839,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         lockParams.leftMargin = dp(8);
         optionsRow.addView(lockButton, lockParams);
 
-        autoNextButton = makeButton(autoNext ? "连播" : "单集");
+        autoNextButton = makeButton(playbackModeLabel());
         autoNextButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                autoNext = !autoNext;
-                autoNextButton.setText(autoNext ? "连播" : "单集");
-                getPreferences().edit().putBoolean(KEY_AUTO_NEXT, autoNext).apply();
-                revealControls();
+                showPlaybackModeMenu();
             }
         });
         LinearLayout.LayoutParams autoNextParams = new LinearLayout.LayoutParams(dp(72), dp(42));
@@ -886,14 +973,20 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                         touchDownY = event.getY();
                         touchDownTime = System.currentTimeMillis();
                         touchMoved = false;
+                        activeVerticalGesture = GESTURE_NONE;
                         longPressTriggered = false;
-                        handler.postDelayed(longPressRunnable, LONG_PRESS_DELAY_MS);
+                        if (!controlsLocked) {
+                            handler.postDelayed(longPressRunnable, LONG_PRESS_DELAY_MS);
+                        }
                         return true;
                     case MotionEvent.ACTION_MOVE:
                         if (Math.abs(event.getX() - touchDownX) > dp(16)
                                 || Math.abs(event.getY() - touchDownY) > dp(16)) {
                             touchMoved = true;
                             handler.removeCallbacks(longPressRunnable);
+                        }
+                        if (!controlsLocked && handleVerticalGesture(event)) {
+                            return true;
                         }
                         return true;
                     case MotionEvent.ACTION_CANCEL:
@@ -905,6 +998,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                         handler.removeCallbacks(longPressRunnable);
                         if (longPressTriggered) {
                             stopLongPressSpeed();
+                            return true;
+                        }
+                        if (controlsLocked) {
+                            showFeedback("控制已锁定");
                             return true;
                         }
                         if (handlePlaybackSwipe(event)) {
@@ -967,6 +1064,58 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             return false;
         }
         return switchPlaybackItem(deltaX < 0 ? 1 : -1);
+    }
+
+    private boolean handleVerticalGesture(MotionEvent event) {
+        if (!prepared || root == null || root.getHeight() <= 0) {
+            return false;
+        }
+        float deltaX = event.getX() - touchDownX;
+        float deltaY = event.getY() - touchDownY;
+        if (activeVerticalGesture == GESTURE_NONE) {
+            if (Math.abs(deltaY) < dp(36) || Math.abs(deltaY) < Math.abs(deltaX) * 1.4f) {
+                return false;
+            }
+            activeVerticalGesture = touchDownX < root.getWidth() / 2f ? GESTURE_BRIGHTNESS : GESTURE_VOLUME;
+            gestureStartBrightness = currentBrightness();
+            AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+            gestureStartVolume = audioManager == null ? 0 : audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+        }
+        float percentDelta = -deltaY / Math.max(root.getHeight(), 1);
+        if (activeVerticalGesture == GESTURE_VOLUME) {
+            adjustVolume(percentDelta);
+        } else if (activeVerticalGesture == GESTURE_BRIGHTNESS) {
+            adjustBrightness(percentDelta);
+        }
+        return true;
+    }
+
+    private void adjustVolume(float percentDelta) {
+        AudioManager audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+        if (audioManager == null) {
+            return;
+        }
+        int maxVolume = Math.max(audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC), 1);
+        int target = Math.max(0, Math.min(maxVolume,
+                gestureStartVolume + Math.round(percentDelta * maxVolume)));
+        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0);
+        showFeedback("音量 " + Math.round(target * 100f / maxVolume) + "%");
+    }
+
+    private float currentBrightness() {
+        WindowManager.LayoutParams params = getWindow().getAttributes();
+        if (params.screenBrightness >= 0f) {
+            return params.screenBrightness;
+        }
+        return 0.5f;
+    }
+
+    private void adjustBrightness(float percentDelta) {
+        float target = Math.max(0.02f, Math.min(1f, gestureStartBrightness + percentDelta));
+        WindowManager.LayoutParams params = getWindow().getAttributes();
+        params.screenBrightness = target;
+        getWindow().setAttributes(params);
+        showFeedback("亮度 " + Math.round(target * 100f) + "%");
     }
 
     private boolean isPointInside(View target, float x, float y) {
@@ -1250,7 +1399,13 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 public void onCompletion(MediaPlayer mediaPlayer) {
                     saveVideoPosition(uri, 0);
                     updatePlayButton();
-                    if (autoNext && switchPlaybackItem(1)) {
+                    if (playbackMode == PLAYBACK_MODE_ONE_LOOP) {
+                        mediaPlayer.seekTo(0);
+                        mediaPlayer.start();
+                        applyPlaybackSpeed();
+                        return;
+                    }
+                    if (playbackMode != PLAYBACK_MODE_SINGLE && switchPlaybackItem(1)) {
                         return;
                     }
                     revealControls();
@@ -1349,6 +1504,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             return false;
         }
         int nextIndex = currentQueueIndex + direction;
+        if ((nextIndex < 0 || nextIndex >= playbackQueue.size())
+                && playbackMode == PLAYBACK_MODE_LIST_LOOP) {
+            nextIndex = nextIndex < 0 ? playbackQueue.size() - 1 : 0;
+        }
         if (nextIndex < 0 || nextIndex >= playbackQueue.size()) {
             showFeedback(direction > 0 ? "已经是最后一个" : "已经是第一个");
             return false;
@@ -1356,8 +1515,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         boolean wasPlaying = player != null && prepared && player.isPlaying();
         currentQueueIndex = nextIndex;
         PlaybackItem item = playbackQueue.get(currentQueueIndex);
-        showFeedback(direction > 0 ? "下一个" : "上一个");
-        openPlaybackItem(item, wasPlaying || autoNext);
+        showFeedback((direction > 0 ? "下一个 " : "上一个 ") + new File(item.path).getName());
+        openPlaybackItem(item, wasPlaying || playbackMode != PLAYBACK_MODE_SINGLE);
         return true;
     }
 
@@ -2298,6 +2457,17 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         updatePlayButton();
     }
 
+    private void restartCurrentVideo() {
+        if (player == null || !prepared) {
+            return;
+        }
+        player.seekTo(0);
+        saveVideoPosition(currentUri, 0);
+        updateProgress();
+        showFeedback("从头播放");
+        revealControls();
+    }
+
     private void seekBy(int deltaMs) {
         if (player == null || !prepared) {
             return;
@@ -2378,9 +2548,19 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
 
         float sx = viewWidth / (float) videoWidth;
         float sy = viewHeight / (float) videoHeight;
-        float scale = fillMode ? Math.max(sx, sy) : Math.min(sx, sy);
-        float scaledWidth = videoWidth * scale;
-        float scaledHeight = videoHeight * scale;
+        float scaledWidth;
+        float scaledHeight;
+        if (videoScaleMode == SCALE_MODE_STRETCH) {
+            scaledWidth = viewWidth;
+            scaledHeight = viewHeight;
+        } else if (videoScaleMode == SCALE_MODE_ORIGINAL) {
+            scaledWidth = Math.min(videoWidth, viewWidth);
+            scaledHeight = Math.min(videoHeight, viewHeight);
+        } else {
+            float scale = videoScaleMode == SCALE_MODE_FILL ? Math.max(sx, sy) : Math.min(sx, sy);
+            scaledWidth = videoWidth * scale;
+            scaledHeight = videoHeight * scale;
+        }
         float dx = (viewWidth - scaledWidth) / 2f;
         float dy = (viewHeight - scaledHeight) / 2f;
 
@@ -2707,8 +2887,15 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         if (uri == null) {
             return;
         }
+        int normalized = Math.max(positionMs, 0);
+        if (player != null && prepared) {
+            int duration = Math.max(player.getDuration(), 0);
+            if (normalized < 10_000 || (duration > 0 && duration - normalized < 15_000)) {
+                normalized = 0;
+            }
+        }
         getPreferences().edit()
-                .putInt(videoPositionKey(uri), Math.max(positionMs, 0))
+                .putInt(videoPositionKey(uri), normalized)
                 .apply();
     }
 

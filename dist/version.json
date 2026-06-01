@@ -1,8 +1,8 @@
 {
-  "versionCode": 17,
-  "versionName": "2.6-beta",
+  "versionCode": 18,
+  "versionName": "2.7-beta",
   "apkUrl": "https://github.com/zhouhaoran-TJU/VibeReplay/raw/main/dist/SmoothPlayer-beta.apk",
-  "apkSize": 78251,
-  "sha256": "83a105acf4d2f2a61377d314904e735c5e92f7f9a19917570d44de367e579f65",
-  "notes": "修复文件浏览时中心播放按钮仍悬浮显示的问题；浏览页显示时播放器中心按钮会强制隐藏，并确保浏览页置顶。"
+  "apkSize": 79887,
+  "sha256": "8cd207018293c52ee9dbdc6d0641d48c666e9b8ed3ffcc0a41123043cec39d8d",
+  "notes": "视频播放优化：新增单集/顺序/列表循环/单集循环播放模式；增加从头播放；扩展适配/填充/拉伸/原始画面模式；优化播放进度记忆规则；锁定时屏蔽手势；左右滑切换显示目标文件名；支持左侧上下滑亮度、右侧上下滑音量；拖动进度条显示目标时间。"
 }
