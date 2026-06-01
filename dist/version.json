@@ -1,6 +1,6 @@
 {
-  "versionCode": 8,
-  "versionName": "1.7-beta",
+  "versionCode": 9,
+  "versionName": "1.8-beta",
   "apkUrl": "https://github.com/zhouhaoran-TJU/VibeReplay/raw/main/dist/SmoothPlayer-beta.apk",
-  "notes": "修复显示控制层时画面下沉；播放/暂停改为符号；新增长按 3 倍速；双击只快进/后退 10 秒不显示控制层；加粗进度条。"
+  "notes": "新增三击快进/后退 1 分钟；Shizuku 浏览器支持按文件大小排序，并在播放前显示视频帧预览。"
 }

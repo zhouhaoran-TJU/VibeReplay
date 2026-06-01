@@ -11,10 +11,12 @@ import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
 import android.media.AudioManager;
+import android.media.MediaMetadataRetriever;
 import android.media.MediaPlayer;
 import android.media.PlaybackParams;
 import android.net.Uri;
@@ -40,6 +42,7 @@ import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.SeekBar;
@@ -59,6 +62,8 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -70,6 +75,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private static final int REQUEST_READ_STORAGE = 1002;
     private static final long CONTROLS_HIDE_DELAY_MS = 3200L;
     private static final int SEEK_STEP_MS = 10_000;
+    private static final int SEEK_TRIPLE_STEP_MS = 60_000;
     private static final String PREFS = "smooth_player";
     private static final String KEY_LAST_PATH = "last_path";
     private static final String KEY_LAST_POSITION = "last_position";
@@ -203,6 +209,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private float lastTapX;
     private boolean longPressActive;
     private boolean longPressTriggered;
+    private int tapCount;
     private IRestrictedFileService restrictedFileService;
     private ParcelFileDescriptor activeShizukuFd;
     private String pendingShizukuPath;
@@ -680,19 +687,29 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                             return true;
                         }
                         long now = System.currentTimeMillis();
-                        boolean doubleTap = now - lastTapTime < TAP_DELAY_MS
+                        boolean sameTapSeries = now - lastTapTime < TAP_DELAY_MS
                                 && Math.abs(event.getX() - lastTapX) < dp(80);
+                        tapCount = sameTapSeries ? tapCount + 1 : 1;
                         lastTapTime = now;
                         lastTapX = event.getX();
-                        if (doubleTap) {
-                            handler.removeCallbacks(singleTapRunnable);
-                            if (event.getX() < root.getWidth() / 2f) {
-                                seekBy(-SEEK_STEP_MS);
-                            } else {
-                                seekBy(SEEK_STEP_MS);
-                            }
-                        } else {
+                        if (tapCount == 1) {
                             handler.postDelayed(singleTapRunnable, TAP_DELAY_MS);
+                        } else if (tapCount == 2) {
+                            handler.removeCallbacks(singleTapRunnable);
+                            int delta = event.getX() < root.getWidth() / 2f ? -SEEK_STEP_MS : SEEK_STEP_MS;
+                            handler.postDelayed(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (tapCount == 2) {
+                                        seekBy(delta);
+                                        tapCount = 0;
+                                    }
+                                }
+                            }, TAP_DELAY_MS);
+                        } else {
+                            handler.removeCallbacks(singleTapRunnable);
+                            seekBy(event.getX() < root.getWidth() / 2f ? -SEEK_TRIPLE_STEP_MS : SEEK_TRIPLE_STEP_MS);
+                            tapCount = 0;
                         }
                         return true;
                     default:
@@ -1106,7 +1123,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                     runOnUiThread(new Runnable() {
                         @Override
                         public void run() {
-                            showShizukuDirectoryDialog(path, rawEntries);
+                            showShizukuDirectoryDialog(path, rawEntries, false);
                         }
                     });
                 } catch (IOException | RemoteException | InterruptedException exception) {
@@ -1122,34 +1139,126 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         });
     }
 
-    private void showShizukuDirectoryDialog(String path, String[] rawEntries) {
+    private void showShizukuDirectoryDialog(String path, String[] rawEntries, boolean sortBySize) {
         List<RestrictedEntry> entries = new ArrayList<>();
         if (!"/sdcard".equals(path)) {
-            entries.add(new RestrictedEntry(true, "..", parentPath(path)));
+            entries.add(new RestrictedEntry(true, 0L, "..", parentPath(path)));
         }
+        List<RestrictedEntry> children = new ArrayList<>();
         for (String rawEntry : rawEntries) {
             RestrictedEntry entry = RestrictedEntry.parse(rawEntry);
             if (entry != null) {
-                entries.add(entry);
+                children.add(entry);
             }
         }
+        sortRestrictedEntries(children, sortBySize);
+        entries.addAll(children);
         CharSequence[] labels = new CharSequence[entries.size()];
         for (int i = 0; i < entries.size(); i++) {
             RestrictedEntry entry = entries.get(i);
-            labels[i] = (entry.directory ? "[目录] " : "[文件] ") + entry.name;
+            labels[i] = entry.label();
         }
         new AlertDialog.Builder(this)
-                .setTitle(path)
+                .setTitle((sortBySize ? "大小 " : "名称 ") + path)
                 .setItems(labels, (dialog, which) -> {
                     RestrictedEntry entry = entries.get(which);
                     if (entry.directory) {
                         showShizukuDirectory(entry.path);
                     } else {
                         pathInput.setText(entry.path);
-                        openRestrictedPathWithShizuku(entry.path);
+                        showVideoPreview(entry);
                     }
                 })
+                .setPositiveButton(sortBySize ? "按名称" : "按大小", (dialog, which) ->
+                        showShizukuDirectoryDialog(path, rawEntries, !sortBySize))
                 .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void sortRestrictedEntries(List<RestrictedEntry> entries, boolean sortBySize) {
+        Collections.sort(entries, new Comparator<RestrictedEntry>() {
+            @Override
+            public int compare(RestrictedEntry left, RestrictedEntry right) {
+                if (left.directory != right.directory) {
+                    return left.directory ? -1 : 1;
+                }
+                if (sortBySize && !left.directory) {
+                    int sizeCompare = Long.compare(right.size, left.size);
+                    if (sizeCompare != 0) {
+                        return sizeCompare;
+                    }
+                }
+                return left.name.toLowerCase(Locale.US).compareTo(right.name.toLowerCase(Locale.US));
+            }
+        });
+    }
+
+    private void showVideoPreview(RestrictedEntry entry) {
+        ProgressDialog progressDialog = new ProgressDialog(this);
+        progressDialog.setMessage("正在生成预览");
+        progressDialog.setIndeterminate(true);
+        progressDialog.setCancelable(false);
+        progressDialog.show();
+        ioExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                Bitmap bitmap = null;
+                try {
+                    bitmap = loadVideoFrame(entry.path);
+                } catch (IOException | RemoteException | InterruptedException exception) {
+                    Log.w(TAG, "Failed to load preview: " + entry.path, exception);
+                }
+                Bitmap preview = bitmap;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        progressDialog.dismiss();
+                        showVideoPreviewDialog(entry, preview);
+                    }
+                });
+            }
+        });
+    }
+
+    private Bitmap loadVideoFrame(String path) throws IOException, RemoteException, InterruptedException {
+        ParcelFileDescriptor descriptor = openFileDescriptorWithShizuku(path);
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(descriptor.getFileDescriptor());
+            return retriever.getFrameAtTime(1_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+        } finally {
+            try {
+                retriever.release();
+            } catch (RuntimeException exception) {
+                Log.w(TAG, "Failed to release retriever", exception);
+            }
+            descriptor.close();
+        }
+    }
+
+    private void showVideoPreviewDialog(RestrictedEntry entry, Bitmap bitmap) {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(18), dp(8), dp(18), 0);
+        if (bitmap != null) {
+            ImageView preview = new ImageView(this);
+            preview.setImageBitmap(bitmap);
+            preview.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            layout.addView(preview, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(180)));
+        }
+        TextView info = makeText(13, Color.rgb(220, 226, 235), false);
+        info.setText(entry.name + "\n" + formatFileSize(entry.size));
+        info.setPadding(0, dp(10), 0, 0);
+        layout.addView(info, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+        new AlertDialog.Builder(this)
+                .setTitle("视频预览")
+                .setView(layout)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("播放", (dialog, which) -> openRestrictedPathWithShizuku(entry.path))
                 .show();
     }
 
@@ -1934,30 +2043,72 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         return String.format(Locale.US, "%02d:%02d", minutes, seconds);
     }
 
+    private String formatFileSize(long bytes) {
+        if (bytes < 1024L) {
+            return bytes + " B";
+        }
+        double value = bytes / 1024.0;
+        String[] units = {"KB", "MB", "GB", "TB"};
+        int unitIndex = 0;
+        while (value >= 1024.0 && unitIndex < units.length - 1) {
+            value /= 1024.0;
+            unitIndex++;
+        }
+        return String.format(Locale.US, "%.1f %s", value, units[unitIndex]);
+    }
+
     private int dp(int value) {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
     }
 
     private static final class RestrictedEntry {
         final boolean directory;
+        final long size;
         final String name;
         final String path;
 
-        RestrictedEntry(boolean directory, String name, String path) {
+        RestrictedEntry(boolean directory, long size, String name, String path) {
             this.directory = directory;
+            this.size = size;
             this.name = name;
             this.path = path;
+        }
+
+        String label() {
+            if (directory) {
+                return "[目录] " + name;
+            }
+            return "[文件] " + name + "  " + readableSize();
+        }
+
+        String readableSize() {
+            if (size < 1024L) {
+                return size + " B";
+            }
+            double value = size / 1024.0;
+            String[] units = {"KB", "MB", "GB", "TB"};
+            int unitIndex = 0;
+            while (value >= 1024.0 && unitIndex < units.length - 1) {
+                value /= 1024.0;
+                unitIndex++;
+            }
+            return String.format(Locale.US, "%.1f %s", value, units[unitIndex]);
         }
 
         static RestrictedEntry parse(String value) {
             if (value == null) {
                 return null;
             }
-            String[] parts = value.split("\\|", 3);
-            if (parts.length != 3) {
+            String[] parts = value.split("\\|", 4);
+            if (parts.length != 4) {
                 return null;
             }
-            return new RestrictedEntry("D".equals(parts[0]), parts[1], parts[2]);
+            long size = 0L;
+            try {
+                size = Long.parseLong(parts[1]);
+            } catch (NumberFormatException ignored) {
+            }
+            return new RestrictedEntry("D".equals(parts[0]), size, parts[2], parts[3]);
         }
     }
 }
