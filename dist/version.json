@@ -1,6 +1,6 @@
 {
-  "versionCode": 10,
-  "versionName": "1.9-beta",
+  "versionCode": 11,
+  "versionName": "2.0-beta",
   "apkUrl": "https://github.com/zhouhaoran-TJU/VibeReplay/raw/main/dist/SmoothPlayer-beta.apk",
-  "notes": "Shizuku 浏览器改为缩略图列表，视频文件直接显示预览图、文件名和大小，保留按名称/大小排序。"
+  "notes": "修正三击快进/后退反馈，三击显示 +60s/-60s，双击仍显示 +10s/-10s。"
 }

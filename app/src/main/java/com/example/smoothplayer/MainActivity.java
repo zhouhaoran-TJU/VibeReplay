@@ -1604,7 +1604,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         int next = Math.max(0, Math.min(duration, player.getCurrentPosition() + deltaMs));
         player.seekTo(next);
         updateProgress();
-        showFeedback(deltaMs > 0 ? "+10s" : "-10s");
+        int seconds = Math.abs(deltaMs) / 1000;
+        showFeedback((deltaMs > 0 ? "+" : "-") + seconds + "s");
     }
 
     private void startLongPressSpeed() {
