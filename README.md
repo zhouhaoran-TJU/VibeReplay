@@ -5,6 +5,7 @@
 ## 功能
 
 - 通过系统文件选择器浏览所有可打开文件，并持久化读取授权
+- 内置 Shizuku 文件浏览器，可浏览系统文件选择器隐藏的 `/sdcard/Android/data` 与 `/sdcard/Android/obb`
 - 兼容输入 `content://`、`file://` 或部分设备允许访问的本地路径
 - `MediaPlayer + TextureView` 播放，优先走设备系统解码器
 - 支持常见本地视频容器和编码，实际能力取决于设备系统 codec

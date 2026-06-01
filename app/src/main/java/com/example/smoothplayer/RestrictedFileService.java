@@ -6,6 +6,10 @@ import android.util.Log;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
 
 public final class RestrictedFileService extends IRestrictedFileService.Stub {
     private static final String TAG = "RestrictedFileService";
@@ -21,6 +25,29 @@ public final class RestrictedFileService extends IRestrictedFileService.Stub {
         } catch (FileNotFoundException exception) {
             throw new RemoteException("Cannot open file: " + exception.getMessage());
         }
+    }
+
+    @Override
+    public String[] listFiles(String path) throws RemoteException {
+        File dir = new File(path);
+        File[] files = dir.listFiles();
+        if (files == null) {
+            throw new RemoteException("Cannot list directory: " + path);
+        }
+        List<String> entries = new ArrayList<>();
+        for (File file : files) {
+            String prefix = file.isDirectory() ? "D|" : "F|";
+            entries.add(prefix + file.getName() + "|" + file.getAbsolutePath());
+        }
+        Collections.sort(entries, (left, right) -> {
+            boolean leftDir = left.startsWith("D|");
+            boolean rightDir = right.startsWith("D|");
+            if (leftDir != rightDir) {
+                return leftDir ? -1 : 1;
+            }
+            return left.toLowerCase(Locale.US).compareTo(right.toLowerCase(Locale.US));
+        });
+        return entries.toArray(new String[0]);
     }
 
     public void destroy() {

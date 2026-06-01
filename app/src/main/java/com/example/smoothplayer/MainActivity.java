@@ -58,6 +58,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -133,7 +135,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                     if (grantResult == PackageManager.PERMISSION_GRANTED && pendingShizukuPath != null) {
                         String path = pendingShizukuPath;
                         pendingShizukuPath = null;
-                        openRestrictedPathWithShizuku(path);
+                        if (new File(path).isDirectory()) {
+                            showShizukuDirectory(path);
+                        } else {
+                            openRestrictedPathWithShizuku(path);
+                        }
                     } else {
                         pendingShizukuPath = null;
                         Toast.makeText(MainActivity.this, "Shizuku 未授权", Toast.LENGTH_SHORT).show();
@@ -456,7 +462,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         pickButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                pickVideo();
+                showPickOptions();
             }
         });
         LinearLayout.LayoutParams pickParams = new LinearLayout.LayoutParams(dp(72), dp(42));
@@ -737,7 +743,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             if (isShizukuGranted() && pendingShizukuPath != null) {
                 String path = pendingShizukuPath;
                 pendingShizukuPath = null;
-                openRestrictedPathWithShizuku(path);
+                if (new File(path).isDirectory()) {
+                    showShizukuDirectory(path);
+                } else {
+                    openRestrictedPathWithShizuku(path);
+                }
             } else {
                 Toast.makeText(this, "Shizuku 未授权", Toast.LENGTH_SHORT).show();
             }
@@ -758,20 +768,36 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             File file = new File(raw);
             if (!file.exists()) {
                 if (looksLikeRestrictedPath(raw)) {
-                    openRestrictedPathWithRoot(raw);
+                    openRestrictedPathOptions(raw);
                 } else {
                     showFeedback("直接路径不可访问，请选择文件");
                 }
                 return;
             }
             if (looksLikeRestrictedPath(raw)) {
-                openRestrictedPathWithRoot(raw);
+                openRestrictedPathOptions(raw);
                 return;
             }
             uri = Uri.fromFile(file);
         }
         saveLastPath(raw);
         openVideo(uri, 0, true);
+    }
+
+    private void showPickOptions() {
+        new AlertDialog.Builder(this)
+                .setTitle("选择文件")
+                .setItems(new CharSequence[]{"系统文件浏览", "Shizuku 浏览 Android/data", "Shizuku 浏览 Android/obb"},
+                        (dialog, which) -> {
+                            if (which == 0) {
+                                pickVideo();
+                            } else if (which == 1) {
+                                browseRestrictedDirectory("/sdcard/Android/data");
+                            } else {
+                                browseRestrictedDirectory("/sdcard/Android/obb");
+                            }
+                        })
+                .show();
     }
 
     private void pickVideo() {
@@ -969,6 +995,92 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 }
             }
         });
+    }
+
+    private void browseRestrictedDirectory(String startPath) {
+        if (!isShizukuAvailable()) {
+            Toast.makeText(this, "请先安装并启动 Shizuku", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (!isShizukuGranted()) {
+            pendingShizukuPath = startPath;
+            Shizuku.requestPermission(REQUEST_SHIZUKU_PERMISSION);
+            return;
+        }
+        showShizukuDirectory(startPath);
+    }
+
+    private void showShizukuDirectory(String path) {
+        ioExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    ensureShizukuServiceBound();
+                    IRestrictedFileService service = restrictedFileService;
+                    if (service == null) {
+                        throw new IOException("Shizuku service is not connected");
+                    }
+                    String[] rawEntries = service.listFiles(path);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            showShizukuDirectoryDialog(path, rawEntries);
+                        }
+                    });
+                } catch (IOException | RemoteException | InterruptedException exception) {
+                    Log.w(TAG, "Shizuku list failed: " + path, exception);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            Toast.makeText(MainActivity.this, "Shizuku 无法浏览此目录", Toast.LENGTH_SHORT).show();
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    private void showShizukuDirectoryDialog(String path, String[] rawEntries) {
+        List<RestrictedEntry> entries = new ArrayList<>();
+        if (!"/sdcard".equals(path)) {
+            entries.add(new RestrictedEntry(true, "..", parentPath(path)));
+        }
+        for (String rawEntry : rawEntries) {
+            RestrictedEntry entry = RestrictedEntry.parse(rawEntry);
+            if (entry != null) {
+                entries.add(entry);
+            }
+        }
+        CharSequence[] labels = new CharSequence[entries.size()];
+        for (int i = 0; i < entries.size(); i++) {
+            RestrictedEntry entry = entries.get(i);
+            labels[i] = (entry.directory ? "[目录] " : "[文件] ") + entry.name;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(path)
+                .setItems(labels, (dialog, which) -> {
+                    RestrictedEntry entry = entries.get(which);
+                    if (entry.directory) {
+                        showShizukuDirectory(entry.path);
+                    } else {
+                        pathInput.setText(entry.path);
+                        openRestrictedPathWithShizuku(entry.path);
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private String parentPath(String path) {
+        if (path == null || path.trim().isEmpty() || "/".equals(path)) {
+            return "/sdcard";
+        }
+        File file = new File(path);
+        String parent = file.getParent();
+        if (parent == null || parent.trim().isEmpty()) {
+            return "/sdcard";
+        }
+        return parent;
     }
 
     private ParcelFileDescriptor openFileDescriptorWithShizuku(String path)
@@ -1694,5 +1806,28 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
 
     private int dp(int value) {
         return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private static final class RestrictedEntry {
+        final boolean directory;
+        final String name;
+        final String path;
+
+        RestrictedEntry(boolean directory, String name, String path) {
+            this.directory = directory;
+            this.name = name;
+            this.path = path;
+        }
+
+        static RestrictedEntry parse(String value) {
+            if (value == null) {
+                return null;
+            }
+            String[] parts = value.split("\\|", 3);
+            if (parts.length != 3) {
+                return null;
+            }
+            return new RestrictedEntry("D".equals(parts[0]), parts[1], parts[2]);
+        }
     }
 }
