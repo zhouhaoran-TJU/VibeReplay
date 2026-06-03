@@ -1,8 +1,8 @@
 {
-  "versionCode": 23,
-  "versionName": "3.2-beta",
+  "versionCode": 24,
+  "versionName": "3.3-beta",
   "apkUrl": "https://github.com/zhouhaoran-TJU/VibeReplay/raw/main/dist/SmoothPlayer-beta.apk",
-  "apkSize": 191431,
-  "sha256": "08ae55aef7e797b5a734fb267c0725ceb71bc0dadd9ada03580dd7d7262e282e",
-  "notes": "优化视频中央播放/暂停按钮，改为更简洁的图标样式。"
+  "apkSize": 191563,
+  "sha256": "e77aa062b81ba5adfce176a55ee4c691bb347633e2f40cc0819b6639f2bcccb9",
+  "notes": "优化横屏播放控制栏，上栏仅显示文件名并合并操作菜单，下栏布局更紧凑简洁。"
 }

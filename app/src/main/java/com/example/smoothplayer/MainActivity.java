@@ -29,6 +29,7 @@ import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
 import android.provider.Settings;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -44,6 +45,7 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -527,37 +529,29 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
 
     private void buildTopBar() {
         topBar = new LinearLayout(this);
-        topBar.setOrientation(LinearLayout.VERTICAL);
-        topBar.setPadding(dp(14), dp(10), dp(14), dp(12));
+        topBar.setOrientation(LinearLayout.HORIZONTAL);
+        topBar.setGravity(Gravity.CENTER_VERTICAL);
+        topBar.setPadding(dp(10), dp(6), dp(8), dp(6));
         topBar.setBackgroundResource(R.drawable.bg_panel);
 
-        LinearLayout titleRow = new LinearLayout(this);
-        titleRow.setGravity(Gravity.CENTER_VERTICAL);
-        titleRow.setOrientation(LinearLayout.HORIZONTAL);
         titleText = makeText(15, Color.WHITE, true);
         titleText.setText("Smooth Player");
         titleText.setSingleLine(true);
-        titleRow.addView(titleText, new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        titleText.setEllipsize(TextUtils.TruncateAt.END);
+        titleText.setGravity(Gravity.CENTER_VERTICAL);
+        topBar.addView(titleText, new LinearLayout.LayoutParams(0,
+                dp(34), 1f));
 
-        Button moreButton = makeButton("更多");
+        Button moreButton = makeCompactButton("⋮");
         moreButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 showMoreOptions();
             }
         });
-        LinearLayout.LayoutParams moreParams = new LinearLayout.LayoutParams(dp(72), dp(36));
+        LinearLayout.LayoutParams moreParams = new LinearLayout.LayoutParams(dp(42), dp(34));
         moreParams.leftMargin = dp(8);
-        titleRow.addView(moreButton, moreParams);
-        topBar.addView(titleRow, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        LinearLayout pathRow = new LinearLayout(this);
-        pathRow.setGravity(Gravity.CENTER_VERTICAL);
-        pathRow.setOrientation(LinearLayout.HORIZONTAL);
-        pathRow.setPadding(0, dp(10), 0, 0);
+        topBar.addView(moreButton, moreParams);
 
         pathInput = new EditText(this);
         pathInput.setSingleLine(true);
@@ -569,52 +563,27 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         pathInput.setSelectAllOnFocus(false);
         pathInput.setBackgroundColor(Color.argb(36, 255, 255, 255));
         pathInput.setPadding(dp(12), 0, dp(12), 0);
-        pathRow.addView(pathInput, new LinearLayout.LayoutParams(0, dp(42), 1f));
-
-        Button openButton = makeButton("打开");
-        openButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                openFromPathInput();
-            }
-        });
-        LinearLayout.LayoutParams openParams = new LinearLayout.LayoutParams(dp(72), dp(42));
-        openParams.leftMargin = dp(8);
-        pathRow.addView(openButton, openParams);
-
-        Button browseButton = makeButton("浏览");
-        browseButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                showBrowseOptions();
-            }
-        });
-        LinearLayout.LayoutParams browseParams = new LinearLayout.LayoutParams(dp(72), dp(42));
-        browseParams.leftMargin = dp(8);
-        pathRow.addView(browseButton, browseParams);
-
-        topBar.addView(pathRow, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
 
         FrameLayout.LayoutParams topParams = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP);
-        topParams.setMargins(dp(12), dp(12), dp(12), 0);
+        topParams.setMargins(dp(8), dp(8), dp(8), 0);
         root.addView(topBar, topParams);
     }
 
     private void showMoreOptions() {
         new AlertDialog.Builder(this)
-                .setTitle("更多")
-                .setItems(new CharSequence[]{"删除当前文件", "检查更新", "文件访问权限"},
+                .setTitle("操作")
+                .setItems(new CharSequence[]{"浏览文件", "删除当前文件", "检查更新", "文件访问权限"},
                         (dialog, which) -> {
                             if (which == 0) {
-                                confirmDeleteCurrentFile();
+                                showBrowseOptions();
                             } else if (which == 1) {
+                                confirmDeleteCurrentFile();
+                            } else if (which == 2) {
                                 checkForUpdates(true);
-                            } else {
+                            } else if (which == 3) {
                                 showAccessOptions();
                             }
                         })
@@ -696,8 +665,12 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private void buildBottomBar() {
         bottomBar = new LinearLayout(this);
         bottomBar.setOrientation(LinearLayout.VERTICAL);
-        bottomBar.setPadding(dp(14), dp(10), dp(14), dp(10));
+        bottomBar.setPadding(dp(10), dp(6), dp(10), dp(6));
         bottomBar.setBackgroundResource(R.drawable.bg_panel);
+
+        LinearLayout progressRow = new LinearLayout(this);
+        progressRow.setGravity(Gravity.CENTER_VERTICAL);
+        progressRow.setOrientation(LinearLayout.HORIZONTAL);
 
         seekBar = new SeekBar(this);
         seekBar.setMax(1000);
@@ -734,70 +707,68 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 scheduleControlsHide();
             }
         });
-        bottomBar.addView(seekBar, new LinearLayout.LayoutParams(
+        progressRow.addView(seekBar, new LinearLayout.LayoutParams(0, dp(34), 1f));
+
+        timeText = makeText(12, Color.rgb(220, 226, 235), false);
+        timeText.setText("00:00 / 00:00");
+        timeText.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams timeParams = new LinearLayout.LayoutParams(dp(104), dp(34));
+        timeParams.leftMargin = dp(8);
+        progressRow.addView(timeText, timeParams);
+        bottomBar.addView(progressRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(46)));
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        HorizontalScrollView controlsScroll = new HorizontalScrollView(this);
+        controlsScroll.setHorizontalScrollBarEnabled(false);
+        controlsScroll.setFillViewport(true);
 
         LinearLayout primaryRow = new LinearLayout(this);
         primaryRow.setGravity(Gravity.CENTER_VERTICAL);
         primaryRow.setOrientation(LinearLayout.HORIZONTAL);
+        primaryRow.setPadding(0, dp(4), 0, 0);
 
-        playButton = makeButton("▶");
+        playButton = makeCompactButton("▶");
         playButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 togglePlay();
             }
         });
-        primaryRow.addView(playButton, new LinearLayout.LayoutParams(dp(54), dp(42)));
+        primaryRow.addView(playButton, new LinearLayout.LayoutParams(dp(44), dp(36)));
 
-        previousButton = makeButton("◀◀");
+        previousButton = makeCompactButton("◀◀");
         previousButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 switchPlaybackItem(-1);
             }
         });
-        LinearLayout.LayoutParams previousParams = new LinearLayout.LayoutParams(dp(58), dp(42));
-        previousParams.leftMargin = dp(8);
+        LinearLayout.LayoutParams previousParams = new LinearLayout.LayoutParams(dp(48), dp(36));
+        previousParams.leftMargin = dp(6);
         primaryRow.addView(previousButton, previousParams);
 
-        nextButton = makeButton("▶▶");
+        nextButton = makeCompactButton("▶▶");
         nextButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 switchPlaybackItem(1);
             }
         });
-        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(58), dp(42));
-        nextParams.leftMargin = dp(8);
+        LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(dp(48), dp(36));
+        nextParams.leftMargin = dp(6);
         primaryRow.addView(nextButton, nextParams);
 
-        Button restartButton = makeButton("从头");
+        Button restartButton = makeCompactButton("重播");
         restartButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 restartCurrentVideo();
             }
         });
-        LinearLayout.LayoutParams restartParams = new LinearLayout.LayoutParams(dp(58), dp(42));
-        restartParams.leftMargin = dp(8);
+        LinearLayout.LayoutParams restartParams = new LinearLayout.LayoutParams(dp(52), dp(36));
+        restartParams.leftMargin = dp(6);
         primaryRow.addView(restartButton, restartParams);
-
-        timeText = makeText(13, Color.rgb(220, 226, 235), false);
-        timeText.setText("00:00 / 00:00");
-        LinearLayout.LayoutParams timeParams = new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        timeParams.leftMargin = dp(12);
-        primaryRow.addView(timeText, timeParams);
-        bottomBar.addView(primaryRow, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        LinearLayout optionsRow = new LinearLayout(this);
-        optionsRow.setGravity(Gravity.CENTER_VERTICAL);
-        optionsRow.setOrientation(LinearLayout.HORIZONTAL);
-        optionsRow.setPadding(0, dp(6), 0, 0);
 
         speedSpinner = new Spinner(this, Spinner.MODE_DROPDOWN);
         ArrayAdapter<String> adapter = new ArrayAdapter<String>(
@@ -818,51 +789,57 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             public void onNothingSelected(AdapterView<?> parent) {
             }
         });
-        optionsRow.addView(speedSpinner, new LinearLayout.LayoutParams(0, dp(42), 1f));
+        LinearLayout.LayoutParams speedParams = new LinearLayout.LayoutParams(dp(78), dp(36));
+        speedParams.leftMargin = dp(10);
+        primaryRow.addView(speedSpinner, speedParams);
 
-        fitButton = makeButton(scaleModeLabel());
+        fitButton = makeCompactButton(scaleModeLabel());
         fitButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 showScaleModeMenu();
             }
         });
-        LinearLayout.LayoutParams fitParams = new LinearLayout.LayoutParams(dp(72), dp(42));
-        fitParams.leftMargin = dp(8);
-        optionsRow.addView(fitButton, fitParams);
+        LinearLayout.LayoutParams fitParams = new LinearLayout.LayoutParams(dp(56), dp(36));
+        fitParams.leftMargin = dp(6);
+        primaryRow.addView(fitButton, fitParams);
 
-        lockButton = makeButton("锁定");
+        lockButton = makeCompactButton("锁");
         lockButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 controlsLocked = !controlsLocked;
-                lockButton.setText(controlsLocked ? "解锁" : "锁定");
+                lockButton.setText(controlsLocked ? "解" : "锁");
                 revealControls();
             }
         });
-        LinearLayout.LayoutParams lockParams = new LinearLayout.LayoutParams(dp(72), dp(42));
-        lockParams.leftMargin = dp(8);
-        optionsRow.addView(lockButton, lockParams);
+        LinearLayout.LayoutParams lockParams = new LinearLayout.LayoutParams(dp(44), dp(36));
+        lockParams.leftMargin = dp(6);
+        primaryRow.addView(lockButton, lockParams);
 
-        autoNextButton = makeButton(playbackModeLabel());
+        autoNextButton = makeCompactButton(playbackModeLabel());
         autoNextButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 showPlaybackModeMenu();
             }
         });
-        LinearLayout.LayoutParams autoNextParams = new LinearLayout.LayoutParams(dp(72), dp(42));
-        autoNextParams.leftMargin = dp(8);
-        optionsRow.addView(autoNextButton, autoNextParams);
-        bottomBar.addView(optionsRow, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
+        LinearLayout.LayoutParams autoNextParams = new LinearLayout.LayoutParams(dp(56), dp(36));
+        autoNextParams.leftMargin = dp(6);
+        primaryRow.addView(autoNextButton, autoNextParams);
+
+        controlsScroll.addView(primaryRow, new HorizontalScrollView.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
+        bottomBar.addView(controlsScroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(42)));
 
         FrameLayout.LayoutParams bottomParams = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM);
-        bottomParams.setMargins(dp(12), 0, dp(12), dp(12));
+        bottomParams.setMargins(dp(8), 0, dp(8), dp(8));
         root.addView(bottomBar, bottomParams);
     }
 
@@ -3116,6 +3093,13 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         return button;
     }
 
+    private Button makeCompactButton(String text) {
+        Button button = makeButton(text);
+        button.setTextSize(12);
+        button.setPadding(dp(4), 0, dp(4), 0);
+        return button;
+    }
+
     private SharedPreferences getPreferences() {
         return getSharedPreferences(PREFS, MODE_PRIVATE);
     }
@@ -3125,11 +3109,19 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
 
     private String displayTitle(Uri uri) {
-        String value = uri.getLastPathSegment();
+        String value = uri == null ? "" : uri.getPath();
+        if ((value == null || value.trim().isEmpty()) && uri != null) {
+            value = uri.getSchemeSpecificPart();
+        }
         if (value == null || value.trim().isEmpty()) {
             value = uri.toString();
         }
-        return value;
+        value = Uri.decode(value);
+        int lastSlash = value.lastIndexOf('/');
+        if (lastSlash >= 0 && lastSlash < value.length() - 1) {
+            value = value.substring(lastSlash + 1);
+        }
+        return value == null || value.trim().isEmpty() ? "Smooth Player" : value;
     }
 
     private String formatTime(int millis) {
