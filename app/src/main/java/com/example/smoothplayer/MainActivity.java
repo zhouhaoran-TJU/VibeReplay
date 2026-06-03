@@ -99,6 +99,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private static final String KEY_AUTO_NEXT = "auto_next";
     private static final String KEY_PLAYBACK_MODE = "playback_mode";
     private static final String KEY_VIDEO_ONLY = "video_only";
+    private static final String KEY_LAST_SHIZUKU_DIR = "last_shizuku_dir";
     private static final String ROOT_CACHE_DIR = "root-cache";
     private static final String ROOT_MOUNT_DIR = "root-mount";
     private static final int PREVIEW_CACHE_LIMIT = 80;
@@ -1011,7 +1012,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                             showFeedback("控制已锁定");
                             return true;
                         }
-                        if (handlePlaybackSwipe(event)) {
+                        if (handleProgressSwipe(event)) {
                             tapCount = 0;
                             handler.removeCallbacks(singleTapRunnable);
                             return true;
@@ -1058,8 +1059,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 || isPointInside(centerPlayButton, event.getX(), event.getY());
     }
 
-    private boolean handlePlaybackSwipe(MotionEvent event) {
-        if (!touchMoved || root == null) {
+    private boolean handleProgressSwipe(MotionEvent event) {
+        if (!touchMoved || root == null || player == null || !prepared) {
             return false;
         }
         float deltaX = event.getX() - touchDownX;
@@ -1070,7 +1071,18 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 || Math.abs(deltaX) < Math.abs(deltaY) * 1.6f) {
             return false;
         }
-        return switchPlaybackItem(deltaX < 0 ? 1 : -1);
+        int videoDuration = Math.max(player.getDuration(), 0);
+        if (videoDuration <= 0) {
+            return false;
+        }
+        int maxDeltaMs = Math.max(30_000, videoDuration / 3);
+        int deltaMs = Math.round((deltaX / Math.max(root.getWidth(), 1)) * maxDeltaMs);
+        int target = Math.max(0, Math.min(videoDuration, player.getCurrentPosition() + deltaMs));
+        player.seekTo(target);
+        saveVideoPosition(currentUri, target);
+        updateProgress();
+        showFeedback((deltaMs >= 0 ? "+" : "-") + formatTime(Math.abs(deltaMs)) + "  " + formatTime(target));
+        return true;
     }
 
     private boolean handleVerticalGesture(MotionEvent event) {
@@ -1286,19 +1298,29 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
 
     private void showShizukuPickOptions() {
+        String lastDir = getPreferences().getString(KEY_LAST_SHIZUKU_DIR, "");
         new AlertDialog.Builder(this)
                 .setTitle("Shizuku 浏览")
-                .setItems(new CharSequence[]{"Android/data", "Android/obb", "存储根目录"},
+                .setItems(shizukuPickLabels(lastDir),
                         (dialog, which) -> {
-                            if (which == 0) {
+                            if (!lastDir.isEmpty() && which == 0) {
+                                browseRestrictedDirectory(lastDir);
+                            } else if (which == (lastDir.isEmpty() ? 0 : 1)) {
                                 browseRestrictedDirectory("/sdcard/Android/data");
-                            } else if (which == 1) {
+                            } else if (which == (lastDir.isEmpty() ? 1 : 2)) {
                                 browseRestrictedDirectory("/sdcard/Android/obb");
                             } else {
                                 browseRestrictedDirectory("/sdcard");
                             }
                         })
                 .show();
+    }
+
+    private CharSequence[] shizukuPickLabels(String lastDir) {
+        if (lastDir == null || lastDir.trim().isEmpty()) {
+            return new CharSequence[]{"Android/data", "Android/obb", "存储根目录"};
+        }
+        return new CharSequence[]{"上次目录", "Android/data", "Android/obb", "存储根目录"};
     }
 
     private void pickVideo() {
@@ -1682,6 +1704,9 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
 
     private void browseRestrictedDirectory(String startPath) {
+        if (startPath != null && !startPath.trim().isEmpty()) {
+            saveLastShizukuDir(startPath);
+        }
         if (!isShizukuAvailable()) {
             Toast.makeText(this, "请先安装并启动 Shizuku", Toast.LENGTH_LONG).show();
             return;
@@ -1726,6 +1751,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
 
     private void showShizukuDirectoryDialog(String path, String[] rawEntries, boolean sortBySize) {
         shizukuSortMode = sortBySize ? 1 : shizukuSortMode;
+        saveLastShizukuDir(path);
         currentBrowserPath = path;
         currentBrowserRawEntries = rawEntries;
         showShizukuBrowser();
@@ -1842,6 +1868,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         }
         pathInput.setText(selected.path);
         openRestrictedPathWithShizuku(selected.path);
+    }
+
+    private void saveLastShizukuDir(String path) {
+        getPreferences().edit().putString(KEY_LAST_SHIZUKU_DIR, path).apply();
     }
 
     private void showShizukuFileActions(String directoryPath, String[] rawEntries, boolean sortBySize,

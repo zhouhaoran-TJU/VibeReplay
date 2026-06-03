@@ -1,8 +1,8 @@
 {
-  "versionCode": 20,
-  "versionName": "2.9-beta",
+  "versionCode": 21,
+  "versionName": "3.0-beta",
   "apkUrl": "https://github.com/zhouhaoran-TJU/VibeReplay/raw/main/dist/SmoothPlayer-beta.apk",
-  "apkSize": 81071,
-  "sha256": "b173f159c9dbba90af3ff4aa7c4658e68efc25e3c13a1cad22302376e18a5496",
-  "notes": "Shizuku 浏览排序新增随机顺序；选择随机后当前目录会按随机顺序显示，工具栏可点击“重排”重新洗牌，播放队列会沿用当前随机列表顺序。"
+  "apkSize": 81395,
+  "sha256": "1437c62aeaf41e450b4097516871da64193422a59775ab05cf5abc161daf0ec5",
+  "notes": "将播放器左右滑动从切换视频改为调整当前视频进度；Shizuku 浏览会记住上次目录，再次进入时可直接选择“上次目录”。"
 }
