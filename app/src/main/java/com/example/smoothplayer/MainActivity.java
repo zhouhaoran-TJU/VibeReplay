@@ -678,16 +678,41 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             Toast.makeText(this, "暂无收藏", Toast.LENGTH_SHORT).show();
             return;
         }
-        CharSequence[] labels = new CharSequence[favorites.size()];
-        for (int i = 0; i < favorites.size(); i++) {
-            labels[i] = favorites.get(i).title;
-        }
-        new AlertDialog.Builder(this)
+        int generation = ++previewGeneration;
+        ListView listView = new ListView(this);
+        listView.setDividerHeight(0);
+        FavoriteItemAdapter adapter = new FavoriteItemAdapter(favorites, generation);
+        listView.setAdapter(adapter);
+        AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("收藏")
-                .setItems(labels, (dialog, which) -> openFavoriteItem(favorites.get(which)))
+                .setView(listView)
                 .setNegativeButton("关闭", null)
-                .setNeutralButton("管理", (dialog, which) -> showFavoriteManageList())
-                .show();
+                .setNeutralButton("管理", (ignored, which) -> showFavoriteManageList())
+                .create();
+        listView.setOnItemClickListener((parent, view, which, id) -> {
+            dialog.dismiss();
+            openFavoriteItem(favorites.get(which));
+        });
+        listView.setOnItemLongClickListener((parent, view, which, id) -> {
+            FavoriteItem item = favorites.get(which);
+            new AlertDialog.Builder(this)
+                    .setTitle("移出收藏")
+                    .setMessage(item.title)
+                    .setNegativeButton("取消", null)
+                    .setPositiveButton("移出", (confirmDialog, confirmWhich) -> {
+                        removeFavoriteForKey(item.key);
+                        favorites.remove(which);
+                        adapter.notifyDataSetChanged();
+                        if (favorites.isEmpty()) {
+                            dialog.dismiss();
+                        }
+                        Toast.makeText(this, "已移出收藏", Toast.LENGTH_SHORT).show();
+                    })
+                    .show();
+            return true;
+        });
+        dialog.setOnDismissListener(dialogInterface -> previewGeneration++);
+        dialog.show();
     }
 
     private void showFavoriteManageList() {
@@ -2440,7 +2465,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             public void run() {
                 Bitmap bitmap = null;
                 try {
-                    bitmap = loadVideoFrame(entry.path);
+                    bitmap = loadVideoFrame(entry.path, true, false);
                 } catch (IOException | RemoteException | InterruptedException exception) {
                     Log.w(TAG, "Failed to load preview: " + entry.path, exception);
                 }
@@ -2456,11 +2481,19 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         });
     }
 
-    private Bitmap loadVideoFrame(String path) throws IOException, RemoteException, InterruptedException {
-        ParcelFileDescriptor descriptor = openFileDescriptorWithShizuku(path);
+    private Bitmap loadVideoFrame(String path, boolean shizuku, boolean contentUri)
+            throws IOException, RemoteException, InterruptedException {
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        ParcelFileDescriptor descriptor = null;
         try {
-            retriever.setDataSource(descriptor.getFileDescriptor());
+            if (shizuku) {
+                descriptor = openFileDescriptorWithShizuku(path);
+                retriever.setDataSource(descriptor.getFileDescriptor());
+            } else if (contentUri) {
+                retriever.setDataSource(this, Uri.parse(path));
+            } else {
+                retriever.setDataSource(path);
+            }
             return retriever.getFrameAtTime(1_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
         } finally {
             try {
@@ -2468,7 +2501,9 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             } catch (RuntimeException exception) {
                 Log.w(TAG, "Failed to release retriever", exception);
             }
-            descriptor.close();
+            if (descriptor != null) {
+                descriptor.close();
+            }
         }
     }
 
@@ -3543,6 +3578,81 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         }
     }
 
+    private final class FavoriteItemAdapter extends BaseAdapter {
+        private final List<FavoriteItem> entries;
+        private final int generation;
+
+        FavoriteItemAdapter(List<FavoriteItem> entries, int generation) {
+            this.entries = entries;
+            this.generation = generation;
+        }
+
+        @Override
+        public int getCount() {
+            return entries.size();
+        }
+
+        @Override
+        public FavoriteItem getItem(int position) {
+            return entries.get(position);
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return position;
+        }
+
+        @Override
+        public View getView(int position, View convertView, android.view.ViewGroup parent) {
+            RowHolder holder;
+            if (convertView == null) {
+                LinearLayout row = new LinearLayout(MainActivity.this);
+                row.setOrientation(LinearLayout.HORIZONTAL);
+                row.setGravity(Gravity.CENTER_VERTICAL);
+                row.setPadding(dp(12), dp(8), dp(12), dp(8));
+
+                ImageView preview = new ImageView(MainActivity.this);
+                preview.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                row.addView(preview, new LinearLayout.LayoutParams(dp(96), dp(54)));
+
+                LinearLayout textColumn = new LinearLayout(MainActivity.this);
+                textColumn.setOrientation(LinearLayout.VERTICAL);
+                textColumn.setPadding(dp(12), 0, 0, 0);
+                TextView name = makeText(14, Color.WHITE, true);
+                name.setSingleLine(true);
+                TextView meta = makeText(12, Color.rgb(174, 183, 194), false);
+                textColumn.addView(name, new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT));
+                textColumn.addView(meta, new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT));
+                row.addView(textColumn, new LinearLayout.LayoutParams(0,
+                        LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+                holder = new RowHolder(preview, name, meta);
+                row.setTag(holder);
+                convertView = row;
+            } else {
+                holder = (RowHolder) convertView.getTag();
+            }
+
+            FavoriteItem item = getItem(position);
+            holder.name.setText(item.title);
+            holder.meta.setText(item.sourceLabel());
+            holder.preview.setBackgroundColor(Color.rgb(18, 24, 31));
+            Bitmap cached = previewCache.get(item.previewKey());
+            if (cached != null) {
+                holder.preview.setImageBitmap(cached);
+            } else {
+                holder.preview.setImageBitmap(null);
+                holder.preview.setImageResource(android.R.drawable.ic_media_play);
+                loadFavoritePreview(item, this, generation);
+            }
+            return convertView;
+        }
+    }
+
     private static final class RowHolder {
         final ImageView preview;
         final TextView name;
@@ -3579,6 +3689,20 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             this.shizuku = shizuku;
             this.contentUri = contentUri;
         }
+
+        String previewKey() {
+            return "favorite:" + key;
+        }
+
+        String sourceLabel() {
+            if (shizuku) {
+                return "Shizuku";
+            }
+            if (contentUri) {
+                return "系统文件";
+            }
+            return "本地文件";
+        }
     }
 
     private void loadListPreview(RestrictedEntry entry, BaseAdapter adapter, int generation) {
@@ -3593,7 +3717,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                     if (generation != previewGeneration) {
                         return;
                     }
-                    Bitmap bitmap = loadVideoFrame(entry.path);
+                    Bitmap bitmap = loadVideoFrame(entry.path, true, false);
                     if (bitmap != null && generation == previewGeneration) {
                         Bitmap scaled = Bitmap.createScaledBitmap(bitmap, dp(96), dp(54), true);
                         previewCache.put(entry.path, scaled);
@@ -3605,6 +3729,44 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                     }
                 } finally {
                     previewLoading.remove(entry.path);
+                }
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (generation == previewGeneration) {
+                            adapter.notifyDataSetChanged();
+                        }
+                    }
+                });
+            }
+        });
+    }
+
+    private void loadFavoritePreview(FavoriteItem item, BaseAdapter adapter, int generation) {
+        String key = item.previewKey();
+        if (previewCache.containsKey(key) || previewLoading.contains(key)) {
+            return;
+        }
+        previewLoading.add(key);
+        ioExecutor.execute(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    if (generation != previewGeneration) {
+                        return;
+                    }
+                    Bitmap bitmap = loadVideoFrame(item.path, item.shizuku, item.contentUri);
+                    if (bitmap != null && generation == previewGeneration) {
+                        Bitmap scaled = Bitmap.createScaledBitmap(bitmap, dp(96), dp(54), true);
+                        previewCache.put(key, scaled);
+                    }
+                } catch (IOException | RemoteException | InterruptedException exception) {
+                    Log.w(TAG, "Failed to load favorite preview: " + item.path, exception);
+                    if (exception instanceof InterruptedException) {
+                        Thread.currentThread().interrupt();
+                    }
+                } finally {
+                    previewLoading.remove(key);
                 }
                 runOnUiThread(new Runnable() {
                     @Override
