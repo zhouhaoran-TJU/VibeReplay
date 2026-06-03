@@ -1,8 +1,8 @@
 {
-  "versionCode": 21,
-  "versionName": "3.0-beta",
+  "versionCode": 22,
+  "versionName": "3.1-beta",
   "apkUrl": "https://github.com/zhouhaoran-TJU/VibeReplay/raw/main/dist/SmoothPlayer-beta.apk",
-  "apkSize": 81395,
-  "sha256": "1437c62aeaf41e450b4097516871da64193422a59775ab05cf5abc161daf0ec5",
-  "notes": "将播放器左右滑动从切换视频改为调整当前视频进度；Shizuku 浏览会记住上次目录，再次进入时可直接选择“上次目录”。"
+  "apkSize": 190207,
+  "sha256": "2ca49d70014207fae044a614f340eec047749c5fb42c15812fe0277dd50e44cf",
+  "notes": "更新应用图标，使用 images/20260603-102058.jpg 生成各密度 launcher 图标。"
 }
