@@ -44,6 +44,7 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
@@ -228,7 +229,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private LinearLayout bottomBar;
     private EditText pathInput;
     private Button playButton;
-    private Button centerPlayButton;
+    private ImageButton centerPlayButton;
     private Button fitButton;
     private Button lockButton;
     private Button previousButton;
@@ -506,7 +507,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER));
 
-        centerPlayButton = makeCenterButton("▶");
+        centerPlayButton = makeCenterButton();
         centerPlayButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
@@ -2727,7 +2728,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         }
         boolean playing = player != null && prepared && player.isPlaying();
         playButton.setText(playing ? "⏸" : "▶");
-        centerPlayButton.setText(playing ? "⏸" : "▶");
+        centerPlayButton.setImageResource(playing ? R.drawable.ic_center_pause : R.drawable.ic_center_play);
+        centerPlayButton.setContentDescription(playing ? "暂停" : "播放");
         if (browserVisible) {
             centerPlayButton.setVisibility(View.GONE);
             return;
@@ -3090,11 +3092,14 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         return textView;
     }
 
-    private Button makeCenterButton(String text) {
-        Button button = makeButton(text);
-        button.setTextSize(18);
-        button.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+    private ImageButton makeCenterButton() {
+        ImageButton button = new ImageButton(this);
+        button.setImageResource(R.drawable.ic_center_play);
+        button.setColorFilter(Color.WHITE);
+        button.setScaleType(ImageView.ScaleType.CENTER);
+        button.setPadding(dp(32), dp(32), dp(32), dp(32));
         button.setBackgroundResource(R.drawable.bg_center_button);
+        button.setContentDescription("播放");
         return button;
     }
 
