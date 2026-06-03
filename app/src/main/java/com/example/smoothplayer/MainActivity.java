@@ -56,6 +56,7 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import rikka.shizuku.Shizuku;
@@ -75,6 +76,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -103,6 +105,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private static final String KEY_PLAYBACK_MODE = "playback_mode";
     private static final String KEY_VIDEO_ONLY = "video_only";
     private static final String KEY_LAST_SHIZUKU_DIR = "last_shizuku_dir";
+    private static final String KEY_FAVORITES = "favorites";
     private static final String ROOT_CACHE_DIR = "root-cache";
     private static final String ROOT_MOUNT_DIR = "root-mount";
     private static final int PREVIEW_CACHE_LIMIT = 80;
@@ -234,6 +237,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private ImageButton centerPlayButton;
     private Button fitButton;
     private Button lockButton;
+    private Button unlockButton;
+    private Button favoriteButton;
     private Button previousButton;
     private Button nextButton;
     private Button autoNextButton;
@@ -519,6 +524,21 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         FrameLayout.LayoutParams centerParams = new FrameLayout.LayoutParams(dp(104), dp(104), Gravity.CENTER);
         root.addView(centerPlayButton, centerParams);
 
+        unlockButton = makeCompactButton("解");
+        unlockButton.setVisibility(View.GONE);
+        unlockButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                controlsLocked = false;
+                updateLockState();
+                revealControls();
+            }
+        });
+        FrameLayout.LayoutParams unlockParams = new FrameLayout.LayoutParams(dp(44), dp(36),
+                Gravity.TOP | Gravity.RIGHT);
+        unlockParams.setMargins(0, dp(8), dp(8), 0);
+        root.addView(unlockButton, unlockParams);
+
         buildTopBar();
         buildBottomBar();
         buildShizukuBrowserOverlay();
@@ -542,6 +562,39 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         topBar.addView(titleText, new LinearLayout.LayoutParams(0,
                 dp(34), 1f));
 
+        favoriteButton = makeCompactButton("☆");
+        favoriteButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                toggleFavoriteCurrent();
+            }
+        });
+        LinearLayout.LayoutParams favoriteParams = new LinearLayout.LayoutParams(dp(42), dp(34));
+        favoriteParams.leftMargin = dp(8);
+        topBar.addView(favoriteButton, favoriteParams);
+
+        Button favoriteListButton = makeCompactButton("收藏");
+        favoriteListButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                showFavoriteList();
+            }
+        });
+        LinearLayout.LayoutParams favoriteListParams = new LinearLayout.LayoutParams(dp(56), dp(34));
+        favoriteListParams.leftMargin = dp(6);
+        topBar.addView(favoriteListButton, favoriteListParams);
+
+        Button browseButton = makeCompactButton("浏览");
+        browseButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                showBrowseOptions();
+            }
+        });
+        LinearLayout.LayoutParams browseParams = new LinearLayout.LayoutParams(dp(50), dp(34));
+        browseParams.leftMargin = dp(6);
+        topBar.addView(browseButton, browseParams);
+
         Button moreButton = makeCompactButton("⋮");
         moreButton.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -550,7 +603,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             }
         });
         LinearLayout.LayoutParams moreParams = new LinearLayout.LayoutParams(dp(42), dp(34));
-        moreParams.leftMargin = dp(8);
+        moreParams.leftMargin = dp(6);
         topBar.addView(moreButton, moreParams);
 
         pathInput = new EditText(this);
@@ -575,15 +628,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private void showMoreOptions() {
         new AlertDialog.Builder(this)
                 .setTitle("操作")
-                .setItems(new CharSequence[]{"浏览文件", "删除当前文件", "检查更新", "文件访问权限"},
+                .setItems(new CharSequence[]{"检查更新", "文件访问权限"},
                         (dialog, which) -> {
                             if (which == 0) {
-                                showBrowseOptions();
-                            } else if (which == 1) {
-                                confirmDeleteCurrentFile();
-                            } else if (which == 2) {
                                 checkForUpdates(true);
-                            } else if (which == 3) {
+                            } else if (which == 1) {
                                 showAccessOptions();
                             }
                         })
@@ -601,6 +650,227 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                     }
                 })
                 .show();
+    }
+
+    private void toggleFavoriteCurrent() {
+        FavoriteItem item = currentFavoriteItem();
+        if (item == null) {
+            Toast.makeText(this, "当前没有可收藏的视频", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        List<FavoriteItem> favorites = favoriteItems();
+        int existingIndex = favoriteIndexOf(favorites, item.key);
+        if (existingIndex >= 0) {
+            favorites.remove(existingIndex);
+            saveFavoriteItems(favorites);
+            Toast.makeText(this, "已取消收藏", Toast.LENGTH_SHORT).show();
+        } else {
+            favorites.add(0, item);
+            saveFavoriteItems(favorites);
+            Toast.makeText(this, "已收藏", Toast.LENGTH_SHORT).show();
+        }
+        updateFavoriteButton();
+    }
+
+    private void showFavoriteList() {
+        List<FavoriteItem> favorites = favoriteItems();
+        if (favorites.isEmpty()) {
+            Toast.makeText(this, "暂无收藏", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        CharSequence[] labels = new CharSequence[favorites.size()];
+        for (int i = 0; i < favorites.size(); i++) {
+            labels[i] = favorites.get(i).title;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("收藏")
+                .setItems(labels, (dialog, which) -> openFavoriteItem(favorites.get(which)))
+                .setNegativeButton("关闭", null)
+                .setNeutralButton("管理", (dialog, which) -> showFavoriteManageList())
+                .show();
+    }
+
+    private void showFavoriteManageList() {
+        List<FavoriteItem> favorites = favoriteItems();
+        if (favorites.isEmpty()) {
+            Toast.makeText(this, "暂无收藏", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        CharSequence[] labels = new CharSequence[favorites.size()];
+        boolean[] checked = new boolean[favorites.size()];
+        for (int i = 0; i < favorites.size(); i++) {
+            labels[i] = favorites.get(i).title;
+            checked[i] = false;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("移出收藏")
+                .setMultiChoiceItems(labels, checked, (dialog, which, isChecked) -> checked[which] = isChecked)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("移出", (dialog, which) -> {
+                    List<FavoriteItem> latest = favoriteItems();
+                    Set<String> removing = new HashSet<>();
+                    for (int i = 0; i < checked.length && i < favorites.size(); i++) {
+                        if (checked[i]) {
+                            removing.add(favorites.get(i).key);
+                        }
+                    }
+                    if (removing.isEmpty()) {
+                        return;
+                    }
+                    List<FavoriteItem> kept = new ArrayList<>();
+                    for (FavoriteItem favorite : latest) {
+                        if (!removing.contains(favorite.key)) {
+                            kept.add(favorite);
+                        }
+                    }
+                    saveFavoriteItems(kept);
+                    updateFavoriteButton();
+                    Toast.makeText(this, "已移出收藏", Toast.LENGTH_SHORT).show();
+                })
+                .show();
+    }
+
+    private void openFavoriteItem(FavoriteItem item) {
+        if (item == null) {
+            return;
+        }
+        clearPlaybackQueue();
+        pathInput.setText(item.path);
+        saveLastPath(item.path);
+        if (item.shizuku) {
+            openVideo(Uri.fromParts("shizuku", item.path, null), 0, true);
+        } else if (item.contentUri) {
+            openVideo(Uri.parse(item.path), 0, true);
+        } else {
+            openVideo(Uri.fromFile(new File(item.path)), 0, true);
+        }
+    }
+
+    private FavoriteItem currentFavoriteItem() {
+        if (currentUri == null) {
+            String raw = pathInput == null ? "" : pathInput.getText().toString().trim();
+            if (raw.isEmpty()) {
+                return null;
+            }
+            if (raw.startsWith("content://")) {
+                return new FavoriteItem(raw, displayTitle(Uri.parse(raw)), raw, false, true);
+            }
+            return new FavoriteItem("file:" + raw, new File(raw).getName(), raw, false, false);
+        }
+        if ("shizuku".equals(currentUri.getScheme())) {
+            String path = currentUri.getSchemeSpecificPart();
+            return new FavoriteItem("shizuku:" + path, new File(path).getName(), path, true, false);
+        }
+        if ("content".equals(currentUri.getScheme())) {
+            String uri = currentUri.toString();
+            return new FavoriteItem(uri, displayTitle(currentUri), uri, false, true);
+        }
+        if ("file".equals(currentUri.getScheme())) {
+            String path = currentUri.getPath();
+            return new FavoriteItem("file:" + path, new File(path).getName(), path, false, false);
+        }
+        String uri = currentUri.toString();
+        return new FavoriteItem(uri, displayTitle(currentUri), uri, false, uri.startsWith("content://"));
+    }
+
+    private List<FavoriteItem> favoriteItems() {
+        List<FavoriteItem> items = new ArrayList<>();
+        String raw = getPreferences().getString(KEY_FAVORITES, "[]");
+        try {
+            JSONArray array = new JSONArray(raw);
+            Set<String> seen = new LinkedHashSet<>();
+            for (int i = 0; i < array.length(); i++) {
+                JSONObject object = array.optJSONObject(i);
+                if (object == null) {
+                    continue;
+                }
+                String key = object.optString("key", "");
+                String path = object.optString("path", "");
+                if (key.isEmpty() || path.isEmpty() || seen.contains(key)) {
+                    continue;
+                }
+                seen.add(key);
+                String title = object.optString("title", "");
+                if (title.isEmpty()) {
+                    title = new File(path).getName();
+                }
+                items.add(new FavoriteItem(key, title, path,
+                        object.optBoolean("shizuku", false),
+                        object.optBoolean("contentUri", false)));
+            }
+        } catch (Exception exception) {
+            Log.w(TAG, "Failed to parse favorites", exception);
+        }
+        return items;
+    }
+
+    private void saveFavoriteItems(List<FavoriteItem> items) {
+        JSONArray array = new JSONArray();
+        Set<String> seen = new HashSet<>();
+        for (FavoriteItem item : items) {
+            if (item == null || item.key.isEmpty() || item.path.isEmpty() || seen.contains(item.key)) {
+                continue;
+            }
+            seen.add(item.key);
+            JSONObject object = new JSONObject();
+            try {
+                object.put("key", item.key);
+                object.put("title", item.title);
+                object.put("path", item.path);
+                object.put("shizuku", item.shizuku);
+                object.put("contentUri", item.contentUri);
+                array.put(object);
+            } catch (Exception exception) {
+                Log.w(TAG, "Failed to save favorite item", exception);
+            }
+        }
+        getPreferences().edit().putString(KEY_FAVORITES, array.toString()).apply();
+    }
+
+    private int favoriteIndexOf(List<FavoriteItem> favorites, String key) {
+        for (int i = 0; i < favorites.size(); i++) {
+            if (favorites.get(i).key.equals(key)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private void updateFavoriteButton() {
+        if (favoriteButton == null) {
+            return;
+        }
+        FavoriteItem item = currentFavoriteItem();
+        boolean favorite = item != null && favoriteIndexOf(favoriteItems(), item.key) >= 0;
+        favoriteButton.setText(favorite ? "★" : "☆");
+    }
+
+    private void removeFavoriteForPath(String path, boolean shizuku, boolean contentUri) {
+        if (path == null || path.isEmpty()) {
+            return;
+        }
+        String key = contentUri ? path : (shizuku ? "shizuku:" + path : "file:" + path);
+        removeFavoriteForKey(key);
+    }
+
+    private void removeFavoriteForKey(String key) {
+        if (key == null || key.isEmpty()) {
+            return;
+        }
+        List<FavoriteItem> favorites = favoriteItems();
+        List<FavoriteItem> kept = new ArrayList<>();
+        boolean removed = false;
+        for (FavoriteItem favorite : favorites) {
+            if (key.equals(favorite.key)) {
+                removed = true;
+            } else {
+                kept.add(favorite);
+            }
+        }
+        if (removed) {
+            saveFavoriteItems(kept);
+            updateFavoriteButton();
+        }
     }
 
     private void showScaleModeMenu() {
@@ -809,8 +1079,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             @Override
             public void onClick(View view) {
                 controlsLocked = !controlsLocked;
-                lockButton.setText(controlsLocked ? "解" : "锁");
-                revealControls();
+                updateLockState();
+                if (!controlsLocked) {
+                    revealControls();
+                }
             }
         });
         LinearLayout.LayoutParams lockParams = new LinearLayout.LayoutParams(dp(44), dp(36));
@@ -1034,6 +1306,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         }
         return isPointInside(topBar, event.getX(), event.getY())
                 || isPointInside(bottomBar, event.getX(), event.getY())
+                || isPointInside(unlockButton, event.getX(), event.getY())
                 || isPointInside(centerPlayButton, event.getX(), event.getY());
     }
 
@@ -1358,6 +1631,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         loading.setVisibility(View.VISIBLE);
         releasePlayer();
         currentUri = uri;
+        updateFavoriteButton();
 
         player = new MediaPlayer();
         prepared = false;
@@ -1390,6 +1664,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 videoWidth = mediaPlayer.getVideoWidth();
                 videoHeight = mediaPlayer.getVideoHeight();
                 titleText.setText(displayTitle(uri));
+                updateFavoriteButton();
                 int resumeMs = seekMs > 0 ? seekMs : savedVideoPosition(uri);
                 if (resumeMs > 0) {
                     mediaPlayer.seekTo(Math.min(resumeMs, mediaPlayer.getDuration()));
@@ -1936,6 +2211,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         }
         releasePlayer();
         if (file.delete()) {
+            removeFavoriteForPath(path, false, false);
             PlaybackItem fallback = removeFromPlaybackQueue(path);
             if (fallback != null) {
                 openPlaybackItem(fallback, true);
@@ -1955,6 +2231,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         try {
             int deleted = getContentResolver().delete(uri, null, null);
             if (deleted > 0) {
+                removeFavoriteForKey(uri.toString());
                 clearPlaybackQueue();
                 currentUri = null;
                 pathInput.setText("");
@@ -2011,6 +2288,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                         if (success) {
                             previewCache.remove(path);
                             previewLoading.remove(path);
+                            removeFavoriteForPath(path, true, false);
                             PlaybackItem fallback = removeFromPlaybackQueue(path);
                             currentUri = null;
                             if (fallback != null) {
@@ -2062,6 +2340,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                         if (success) {
                             previewCache.remove(entry.path);
                             previewLoading.remove(entry.path);
+                            removeFavoriteForPath(entry.path, true, false);
                             PlaybackItem fallback = removeFromPlaybackQueue(entry.path);
                             if (currentUri != null && "shizuku".equals(currentUri.getScheme())
                                     && entry.path.equals(currentUri.getSchemeSpecificPart())) {
@@ -2696,6 +2975,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         if (timeText != null) {
             timeText.setText("00:00 / 00:00");
         }
+        updateFavoriteButton();
         updatePlayButton();
     }
 
@@ -2707,7 +2987,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         playButton.setText(playing ? "⏸" : "▶");
         centerPlayButton.setImageResource(playing ? R.drawable.ic_center_pause : R.drawable.ic_center_play);
         centerPlayButton.setContentDescription(playing ? "暂停" : "播放");
-        if (browserVisible) {
+        if (browserVisible || controlsLocked) {
             centerPlayButton.setVisibility(View.GONE);
             return;
         }
@@ -2727,18 +3007,42 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
 
     private void setControlsVisible(boolean visible) {
-        controlsVisible = visible;
-        int visibility = visible ? View.VISIBLE : View.GONE;
+        controlsVisible = visible && !controlsLocked;
+        int visibility = controlsVisible ? View.VISIBLE : View.GONE;
         topBar.setVisibility(visibility);
         bottomBar.setVisibility(visibility);
-        dimLayer.setVisibility(visible ? View.VISIBLE : View.GONE);
+        dimLayer.setVisibility(controlsVisible ? View.VISIBLE : View.GONE);
+        updateLockState();
         updatePlayButton();
-        if (visible) {
+        if (controlsVisible) {
             scheduleControlsHide();
             hideSystemBars();
         } else {
             hideSystemBars();
         }
+    }
+
+    private void updateLockState() {
+        if (lockButton != null) {
+            lockButton.setText(controlsLocked ? "解" : "锁");
+        }
+        if (unlockButton != null) {
+            unlockButton.setVisibility(controlsLocked ? View.VISIBLE : View.GONE);
+        }
+        if (controlsLocked) {
+            handler.removeCallbacks(hideControlsRunnable);
+            controlsVisible = false;
+            if (topBar != null) {
+                topBar.setVisibility(View.GONE);
+            }
+            if (bottomBar != null) {
+                bottomBar.setVisibility(View.GONE);
+            }
+            if (dimLayer != null) {
+                dimLayer.setVisibility(View.GONE);
+            }
+        }
+        updatePlayButton();
     }
 
     private void hideSystemBars() {
@@ -3258,6 +3562,22 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         PlaybackItem(String path, boolean shizuku) {
             this.path = path;
             this.shizuku = shizuku;
+        }
+    }
+
+    private static final class FavoriteItem {
+        final String key;
+        final String title;
+        final String path;
+        final boolean shizuku;
+        final boolean contentUri;
+
+        FavoriteItem(String key, String title, String path, boolean shizuku, boolean contentUri) {
+            this.key = key;
+            this.title = title;
+            this.path = path;
+            this.shizuku = shizuku;
+            this.contentUri = contentUri;
         }
     }
 
