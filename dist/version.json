@@ -1,8 +1,8 @@
 {
-  "versionCode": 26,
-  "versionName": "3.5-beta",
+  "versionCode": 27,
+  "versionName": "3.6-beta",
   "apkUrl": "https://github.com/zhouhaoran-TJU/VibeReplay/raw/main/dist/SmoothPlayer-beta.apk",
-  "apkSize": 196631,
-  "sha256": "6c7eca0988e20df472e46289a90d868ae11a13ee66dc9883b3714c46a143d27b",
-  "notes": "收藏列表新增视频预览缩略图，支持 Shizuku、本地文件和系统文件来源。"
+  "apkSize": 197163,
+  "sha256": "1da6aea7bb62b8c5b6fb605eb3fcb85364ce71b29d22ffdaf2c7ae23cb064b8f",
+  "notes": "播放页操作菜单新增删除当前视频选项，删除前二次确认，并同步更新播放队列和收藏。"
 }

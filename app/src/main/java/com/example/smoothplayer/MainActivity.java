@@ -628,14 +628,16 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private void showMoreOptions() {
         new AlertDialog.Builder(this)
                 .setTitle("操作")
-                .setItems(new CharSequence[]{"检查更新", "文件访问权限"},
-                        (dialog, which) -> {
-                            if (which == 0) {
-                                checkForUpdates(true);
-                            } else if (which == 1) {
-                                showAccessOptions();
-                            }
-                        })
+                .setItems(MoreOptions.labels(), (dialog, which) -> {
+                    MoreOptions.Action action = MoreOptions.actionAt(which);
+                    if (action == MoreOptions.Action.CHECK_UPDATE) {
+                        checkForUpdates(true);
+                    } else if (action == MoreOptions.Action.FILE_ACCESS) {
+                        showAccessOptions();
+                    } else if (action == MoreOptions.Action.DELETE_CURRENT_VIDEO) {
+                        confirmDeleteCurrentFile();
+                    }
+                })
                 .show();
     }
 
