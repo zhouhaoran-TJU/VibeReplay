@@ -3,6 +3,7 @@
 .build-env/
 .codex/
 .agents/
+.worktrees/
 build/
 app/build/
 local.properties
