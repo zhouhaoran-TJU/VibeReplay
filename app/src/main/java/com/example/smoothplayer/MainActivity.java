@@ -693,7 +693,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 .create();
         listView.setOnItemClickListener((parent, view, which, id) -> {
             dialog.dismiss();
-            openFavoriteItem(favorites.get(which));
+            openFavoriteItem(favorites, which);
         });
         listView.setOnItemLongClickListener((parent, view, which, id) -> {
             FavoriteItem item = favorites.get(which);
@@ -757,20 +757,13 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 .show();
     }
 
-    private void openFavoriteItem(FavoriteItem item) {
-        if (item == null) {
+    private void openFavoriteItem(List<FavoriteItem> favorites, int selectedIndex) {
+        if (selectedIndex < 0 || selectedIndex >= favorites.size()) {
             return;
         }
-        clearPlaybackQueue();
-        pathInput.setText(item.path);
-        saveLastPath(item.path);
-        if (item.shizuku) {
-            openVideo(Uri.fromParts("shizuku", item.path, null), 0, true);
-        } else if (item.contentUri) {
-            openVideo(Uri.parse(item.path), 0, true);
-        } else {
-            openVideo(Uri.fromFile(new File(item.path)), 0, true);
-        }
+        List<PlaybackItem> queue = PlaybackItem.fromFavorites(favorites);
+        setPlaybackQueue(queue, selectedIndex);
+        openPlaybackItem(queue.get(selectedIndex), true);
     }
 
     private FavoriteItem currentFavoriteItem() {
@@ -1818,21 +1811,29 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         saveLastPath(item.path);
         if (item.shizuku) {
             openVideo(Uri.fromParts("shizuku", item.path, null), 0, autoPlay);
+        } else if (item.contentUri) {
+            openVideo(Uri.parse(item.path), 0, autoPlay);
         } else {
             openVideo(Uri.fromFile(new File(item.path)), 0, autoPlay);
         }
     }
 
     private void setPlaybackQueue(List<PlaybackItem> items, String selectedPath) {
-        playbackQueue.clear();
-        playbackQueue.addAll(items);
-        currentQueueIndex = -1;
-        for (int i = 0; i < playbackQueue.size(); i++) {
-            if (playbackQueue.get(i).path.equals(selectedPath)) {
-                currentQueueIndex = i;
+        int selectedIndex = -1;
+        for (int i = 0; i < items.size(); i++) {
+            if (items.get(i).path.equals(selectedPath)) {
+                selectedIndex = i;
                 break;
             }
         }
+        setPlaybackQueue(items, selectedIndex);
+    }
+
+    private void setPlaybackQueue(List<PlaybackItem> items, int selectedIndex) {
+        playbackQueue.clear();
+        playbackQueue.addAll(items);
+        currentQueueIndex = selectedIndex >= 0 && selectedIndex < playbackQueue.size()
+                ? selectedIndex : -1;
     }
 
     private void setLocalPlaybackQueue(File selectedFile) {
@@ -1890,10 +1891,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         return true;
     }
 
-    private PlaybackItem removeFromPlaybackQueue(String path) {
+    private PlaybackItem removeFromPlaybackQueue(String path, boolean shizuku, boolean contentUri) {
         PlaybackItem fallback = null;
         for (int i = playbackQueue.size() - 1; i >= 0; i--) {
-            if (playbackQueue.get(i).path.equals(path)) {
+            if (playbackQueue.get(i).matches(path, shizuku, contentUri)) {
                 playbackQueue.remove(i);
                 if (i < playbackQueue.size()) {
                     fallback = playbackQueue.get(i);
@@ -2239,7 +2240,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         releasePlayer();
         if (file.delete()) {
             removeFavoriteForPath(path, false, false);
-            PlaybackItem fallback = removeFromPlaybackQueue(path);
+            PlaybackItem fallback = removeFromPlaybackQueue(path, false, false);
             if (fallback != null) {
                 openPlaybackItem(fallback, true);
             } else {
@@ -2259,11 +2260,15 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             int deleted = getContentResolver().delete(uri, null, null);
             if (deleted > 0) {
                 removeFavoriteForKey(uri.toString());
-                clearPlaybackQueue();
+                PlaybackItem fallback = removeFromPlaybackQueue(uri.toString(), false, true);
                 currentUri = null;
-                pathInput.setText("");
-                titleText.setText("Smooth Player");
-                resetPlaybackDisplay();
+                if (fallback != null) {
+                    openPlaybackItem(fallback, true);
+                } else {
+                    pathInput.setText("");
+                    titleText.setText("Smooth Player");
+                    resetPlaybackDisplay();
+                }
                 Toast.makeText(this, "已删除", Toast.LENGTH_SHORT).show();
             } else {
                 Toast.makeText(this, "系统文件选择器未允许删除", Toast.LENGTH_SHORT).show();
@@ -2316,7 +2321,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                             previewCache.remove(path);
                             previewLoading.remove(path);
                             removeFavoriteForPath(path, true, false);
-                            PlaybackItem fallback = removeFromPlaybackQueue(path);
+                            PlaybackItem fallback = removeFromPlaybackQueue(path, true, false);
                             currentUri = null;
                             if (fallback != null) {
                                 openPlaybackItem(fallback, true);
@@ -2368,7 +2373,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                             previewCache.remove(entry.path);
                             previewLoading.remove(entry.path);
                             removeFavoriteForPath(entry.path, true, false);
-                            PlaybackItem fallback = removeFromPlaybackQueue(entry.path);
+                            PlaybackItem fallback = removeFromPlaybackQueue(entry.path, true, false);
                             if (currentUri != null && "shizuku".equals(currentUri.getScheme())
                                     && entry.path.equals(currentUri.getSchemeSpecificPart())) {
                                 releasePlayer();
@@ -3664,46 +3669,6 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             this.preview = preview;
             this.name = name;
             this.meta = meta;
-        }
-    }
-
-    private static final class PlaybackItem {
-        final String path;
-        final boolean shizuku;
-
-        PlaybackItem(String path, boolean shizuku) {
-            this.path = path;
-            this.shizuku = shizuku;
-        }
-    }
-
-    private static final class FavoriteItem {
-        final String key;
-        final String title;
-        final String path;
-        final boolean shizuku;
-        final boolean contentUri;
-
-        FavoriteItem(String key, String title, String path, boolean shizuku, boolean contentUri) {
-            this.key = key;
-            this.title = title;
-            this.path = path;
-            this.shizuku = shizuku;
-            this.contentUri = contentUri;
-        }
-
-        String previewKey() {
-            return "favorite:" + key;
-        }
-
-        String sourceLabel() {
-            if (shizuku) {
-                return "Shizuku";
-            }
-            if (contentUri) {
-                return "系统文件";
-            }
-            return "本地文件";
         }
     }
 

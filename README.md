@@ -15,6 +15,7 @@
 - 双击左半屏后退 10 秒，双击右半屏快进 10 秒
 - 三击左半屏后退 1 分钟，三击右半屏快进 1 分钟
 - 长按临时 3 倍速播放，松手恢复原倍速
+- 从收藏列表播放时支持按收藏顺序切换上一个、下一个视频和自动连播
 - Shizuku 浏览器支持按文件大小排序，并以视频预览图、文件名和大小展示文件
 - 适配/填充画面模式、控制层锁定、自动隐藏控制层
 - 保存最近播放的视频、进度、倍速和画面模式，Surface 重建后自动恢复
@@ -25,14 +26,14 @@
 
 ## 构建
 
-本项目复用同工作区 `lightroom_android` 的本地构建环境：
+本项目复用同工作区根目录的本地构建环境：
 
 ```bash
-JAVA_HOME=/home/mi/WorkSpace/Projects/VibeCoding/lightroom_android/.build-env/jdk-17 \
-ANDROID_HOME=/home/mi/WorkSpace/Projects/VibeCoding/lightroom_android/.build-env/android-sdk \
-ANDROID_SDK_ROOT=/home/mi/WorkSpace/Projects/VibeCoding/lightroom_android/.build-env/android-sdk \
-GRADLE_USER_HOME=/home/mi/WorkSpace/Projects/VibeCoding/lightroom_android/.gradle-home \
-/home/mi/WorkSpace/Projects/VibeCoding/lightroom_android/.build-env/gradle-7.6.4/bin/gradle --no-daemon :app:assembleDebug
+JAVA_HOME=/home/mi/WorkSpace/Projects/VibeCoding/.build-env/jdk-17 \
+ANDROID_HOME=/home/mi/WorkSpace/Projects/VibeCoding/.build-env/android-sdk \
+ANDROID_SDK_ROOT=/home/mi/WorkSpace/Projects/VibeCoding/.build-env/android-sdk \
+GRADLE_USER_HOME=/home/mi/WorkSpace/Projects/VibeCoding/video_player_android/.gradle-home \
+/home/mi/WorkSpace/Projects/VibeCoding/.build-env/gradle-7.6.4/bin/gradle --no-daemon :app:assembleDebug
 ```
 
 APK 输出：
