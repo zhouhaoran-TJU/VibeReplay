@@ -1,8 +1,8 @@
 {
-  "versionCode": 28,
-  "versionName": "3.7-beta",
+  "versionCode": 29,
+  "versionName": "3.8-beta",
   "apkUrl": "https://github.com/zhouhaoran-TJU/VibeReplay/raw/main/dist/SmoothPlayer-beta.apk",
-  "apkSize": 197331,
-  "sha256": "43564777ebcab99adb406e34fab9bc8ed4e8c3cf4f8b4ac16ddb44955cf51b46",
-  "notes": "从收藏列表播放时支持按收藏顺序切换上一个、下一个视频，并支持自动连播。"
+  "apkSize": 200871,
+  "sha256": "c395bb95c84d0c31374c0eaf80bf6227d8fb26a2ecda7d86976bae064dcf1a7a",
+  "notes": "支持为视频添加多个标签，可输入新标签或选择历史标签，并按标签浏览和连续播放。"
 }

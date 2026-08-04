@@ -106,6 +106,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private static final String KEY_VIDEO_ONLY = "video_only";
     private static final String KEY_LAST_SHIZUKU_DIR = "last_shizuku_dir";
     private static final String KEY_FAVORITES = "favorites";
+    private static final String KEY_TAGGED_VIDEOS = "tagged_videos";
     private static final String ROOT_CACHE_DIR = "root-cache";
     private static final String ROOT_MOUNT_DIR = "root-mount";
     private static final int PREVIEW_CACHE_LIMIT = 80;
@@ -630,7 +631,9 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 .setTitle("操作")
                 .setItems(MoreOptions.labels(), (dialog, which) -> {
                     MoreOptions.Action action = MoreOptions.actionAt(which);
-                    if (action == MoreOptions.Action.CHECK_UPDATE) {
+                    if (action == MoreOptions.Action.EDIT_CURRENT_VIDEO_TAGS) {
+                        showCurrentVideoTagEditor();
+                    } else if (action == MoreOptions.Action.CHECK_UPDATE) {
                         checkForUpdates(true);
                     } else if (action == MoreOptions.Action.FILE_ACCESS) {
                         showAccessOptions();
@@ -641,11 +644,133 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 .show();
     }
 
+    private void showCurrentVideoTagEditor() {
+        FavoriteItem current = currentFavoriteItem();
+        if (current == null) {
+            Toast.makeText(this, "当前没有可添加标签的视频", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        List<TaggedVideo> records = taggedVideos();
+        TaggedVideo existing = null;
+        for (TaggedVideo record : records) {
+            if (record.key.equals(current.key)) {
+                existing = record;
+                break;
+            }
+        }
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(20), dp(4), dp(20), 0);
+
+        TextView videoTitle = makeText(14, Color.WHITE, true);
+        videoTitle.setText(current.title);
+        videoTitle.setSingleLine(true);
+        videoTitle.setEllipsize(TextUtils.TruncateAt.END);
+        content.addView(videoTitle, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        EditText newTagsInput = new EditText(this);
+        newTagsInput.setSingleLine(false);
+        newTagsInput.setMaxLines(2);
+        newTagsInput.setHint("新标签");
+        newTagsInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        content.addView(newTagsInput, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        List<String> history = TagCatalog.allTags(records);
+        ListView historyList = new ListView(this);
+        if (!history.isEmpty()) {
+            TextView historyTitle = makeText(13, Color.rgb(174, 183, 194), false);
+            historyTitle.setText("历史标签");
+            historyTitle.setPadding(0, dp(8), 0, dp(4));
+            content.addView(historyTitle, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+            historyList.setChoiceMode(ListView.CHOICE_MODE_MULTIPLE);
+            historyList.setAdapter(new ArrayAdapter<>(this,
+                    android.R.layout.simple_list_item_multiple_choice, history));
+            if (existing != null) {
+                for (int i = 0; i < history.size(); i++) {
+                    historyList.setItemChecked(i, TagCatalog.containsTag(existing.tags, history.get(i)));
+                }
+            }
+            int listHeight = Math.min(dp(220), Math.max(dp(56), history.size() * dp(48)));
+            content.addView(historyList, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, listHeight));
+        }
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("编辑视频标签")
+                .setView(content)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("保存", null)
+                .create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(view -> {
+                    List<String> selected = new ArrayList<>();
+                    for (int i = 0; i < history.size(); i++) {
+                        if (historyList.isItemChecked(i)) {
+                            selected.add(history.get(i));
+                        }
+                    }
+                    List<String> tags = TagCatalog.combineTags(
+                            selected, newTagsInput.getText().toString());
+                    TaggedVideo updated = new TaggedVideo(current.key, current.title, current.path,
+                            current.shizuku, current.contentUri, tags);
+                    saveTaggedVideos(TagCatalog.upsert(taggedVideos(), updated));
+                    Toast.makeText(this, tags.isEmpty() ? "已清除标签" : "标签已保存",
+                            Toast.LENGTH_SHORT).show();
+                    dialog.dismiss();
+                }));
+        dialog.show();
+    }
+
+    private void showTagBrowser() {
+        List<TaggedVideo> records = taggedVideos();
+        List<String> tags = TagCatalog.allTags(records);
+        if (tags.isEmpty()) {
+            Toast.makeText(this, "暂无标签", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("标签")
+                .setItems(tags.toArray(new CharSequence[0]), (dialog, which) ->
+                        showTaggedVideoList(tags.get(which),
+                                TagCatalog.videosForTag(records, tags.get(which))))
+                .setNegativeButton("关闭", null)
+                .show();
+    }
+
+    private void showTaggedVideoList(String tag, List<TaggedVideo> tagged) {
+        List<FavoriteItem> videos = new ArrayList<>();
+        for (TaggedVideo video : tagged) {
+            videos.add(video.asFavoriteItem());
+        }
+        int generation = ++previewGeneration;
+        ListView listView = new ListView(this);
+        listView.setDividerHeight(0);
+        listView.setAdapter(new FavoriteItemAdapter(videos, generation));
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(tag)
+                .setView(listView)
+                .setNegativeButton("关闭", null)
+                .create();
+        listView.setOnItemClickListener((parent, view, which, id) -> {
+            dialog.dismiss();
+            openFavoriteItem(videos, which);
+        });
+        dialog.setOnDismissListener(ignored -> previewGeneration++);
+        dialog.show();
+    }
+
     private void showBrowseOptions() {
         new AlertDialog.Builder(this)
                 .setTitle("浏览")
-                .setItems(new CharSequence[]{"Shizuku 浏览", "系统浏览"}, (dialog, which) -> {
+                .setItems(new CharSequence[]{"按标签浏览", "Shizuku 浏览", "系统浏览"}, (dialog, which) -> {
                     if (which == 0) {
+                        showTagBrowser();
+                    } else if (which == 1) {
                         showShizukuPickOptions();
                     } else {
                         pickVideo();
@@ -845,6 +970,85 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             }
         }
         getPreferences().edit().putString(KEY_FAVORITES, array.toString()).apply();
+    }
+
+    private List<TaggedVideo> taggedVideos() {
+        List<TaggedVideo> records = new ArrayList<>();
+        String raw = getPreferences().getString(KEY_TAGGED_VIDEOS, "[]");
+        try {
+            JSONArray array = new JSONArray(raw);
+            Set<String> seen = new LinkedHashSet<>();
+            for (int i = 0; i < array.length(); i++) {
+                JSONObject object = array.optJSONObject(i);
+                if (object == null) {
+                    continue;
+                }
+                String key = object.optString("key", "");
+                String path = object.optString("path", "");
+                JSONArray tagArray = object.optJSONArray("tags");
+                if (key.isEmpty() || path.isEmpty() || tagArray == null || seen.contains(key)) {
+                    continue;
+                }
+                List<String> tags = new ArrayList<>();
+                for (int tagIndex = 0; tagIndex < tagArray.length(); tagIndex++) {
+                    tags.add(tagArray.optString(tagIndex, ""));
+                }
+                tags = TagCatalog.normalizeTags(tags);
+                if (tags.isEmpty()) {
+                    continue;
+                }
+                seen.add(key);
+                String title = object.optString("title", "");
+                if (title.isEmpty()) {
+                    title = new File(path).getName();
+                }
+                records.add(new TaggedVideo(key, title, path,
+                        object.optBoolean("shizuku", false),
+                        object.optBoolean("contentUri", false), tags));
+            }
+        } catch (Exception exception) {
+            Log.w(TAG, "Failed to parse tagged videos", exception);
+        }
+        return records;
+    }
+
+    private void saveTaggedVideos(List<TaggedVideo> records) {
+        JSONArray array = new JSONArray();
+        Set<String> seen = new HashSet<>();
+        for (TaggedVideo record : records) {
+            if (record == null || record.key.isEmpty() || record.path.isEmpty()
+                    || record.tags.isEmpty() || seen.contains(record.key)) {
+                continue;
+            }
+            seen.add(record.key);
+            JSONObject object = new JSONObject();
+            JSONArray tags = new JSONArray();
+            for (String tag : record.tags) {
+                tags.put(tag);
+            }
+            try {
+                object.put("key", record.key);
+                object.put("title", record.title);
+                object.put("path", record.path);
+                object.put("shizuku", record.shizuku);
+                object.put("contentUri", record.contentUri);
+                object.put("tags", tags);
+                array.put(object);
+            } catch (Exception exception) {
+                Log.w(TAG, "Failed to save tagged video", exception);
+            }
+        }
+        getPreferences().edit().putString(KEY_TAGGED_VIDEOS, array.toString()).apply();
+    }
+
+    private void removeTaggedVideoForPath(String path, boolean shizuku, boolean contentUri) {
+        if (path == null || path.isEmpty()) {
+            return;
+        }
+        String key = contentUri ? path : (shizuku ? "shizuku:" + path : "file:" + path);
+        TaggedVideo removed = new TaggedVideo(key, "", path, shizuku, contentUri,
+                Collections.emptyList());
+        saveTaggedVideos(TagCatalog.upsert(taggedVideos(), removed));
     }
 
     private int favoriteIndexOf(List<FavoriteItem> favorites, String key) {
@@ -2240,6 +2444,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         releasePlayer();
         if (file.delete()) {
             removeFavoriteForPath(path, false, false);
+            removeTaggedVideoForPath(path, false, false);
             PlaybackItem fallback = removeFromPlaybackQueue(path, false, false);
             if (fallback != null) {
                 openPlaybackItem(fallback, true);
@@ -2260,6 +2465,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             int deleted = getContentResolver().delete(uri, null, null);
             if (deleted > 0) {
                 removeFavoriteForKey(uri.toString());
+                removeTaggedVideoForPath(uri.toString(), false, true);
                 PlaybackItem fallback = removeFromPlaybackQueue(uri.toString(), false, true);
                 currentUri = null;
                 if (fallback != null) {
@@ -2321,6 +2527,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                             previewCache.remove(path);
                             previewLoading.remove(path);
                             removeFavoriteForPath(path, true, false);
+                            removeTaggedVideoForPath(path, true, false);
                             PlaybackItem fallback = removeFromPlaybackQueue(path, true, false);
                             currentUri = null;
                             if (fallback != null) {
@@ -2373,6 +2580,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                             previewCache.remove(entry.path);
                             previewLoading.remove(entry.path);
                             removeFavoriteForPath(entry.path, true, false);
+                            removeTaggedVideoForPath(entry.path, true, false);
                             PlaybackItem fallback = removeFromPlaybackQueue(entry.path, true, false);
                             if (currentUri != null && "shizuku".equals(currentUri.getScheme())
                                     && entry.path.equals(currentUri.getSchemeSpecificPart())) {
