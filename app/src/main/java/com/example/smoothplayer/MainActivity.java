@@ -254,6 +254,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private Button browserSortButton;
     private Button browserDirectionButton;
     private Button browserFilterButton;
+    private Button browserDeleteButton;
     private ProgressBar loading;
     private Spinner speedSpinner;
 
@@ -299,7 +300,11 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private String pendingShizukuPath;
     private String currentBrowserPath;
     private String[] currentBrowserRawEntries;
+    private final Set<String> selectedBrowserPaths = new HashSet<>();
+    private boolean browserMultiSelect;
     private boolean browserVisible;
+    private String playbackOriginBrowserPath;
+    private boolean returnToDirectoryArmed;
     private final List<PlaybackItem> playbackQueue = new ArrayList<>();
     private int currentQueueIndex = -1;
 
@@ -397,7 +402,19 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     @Override
     public void onBackPressed() {
         if (browserVisible) {
+            if (returnToDirectoryArmed) {
+                returnToDirectoryArmed = false;
+                super.onBackPressed();
+                return;
+            }
             hideShizukuBrowser();
+            return;
+        }
+        if (playbackOriginBrowserPath != null && !playbackOriginBrowserPath.isEmpty()) {
+            String path = playbackOriginBrowserPath;
+            playbackOriginBrowserPath = null;
+            returnToDirectoryArmed = true;
+            showShizukuDirectory(path);
             return;
         }
         super.onBackPressed();
@@ -678,6 +695,23 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         content.addView(newTagsInput, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
+        TextView ratingTitle = makeText(13, Color.rgb(174, 183, 194), false);
+        ratingTitle.setText("评分");
+        ratingTitle.setPadding(0, dp(8), 0, dp(2));
+        content.addView(ratingTitle, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        Spinner ratingSpinner = new Spinner(this);
+        String[] ratingLabels = new String[11];
+        ratingLabels[0] = "未评分";
+        for (int i = 1; i <= 10; i++) {
+            ratingLabels[i] = String.valueOf(i);
+        }
+        ratingSpinner.setAdapter(new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_dropdown_item, ratingLabels));
+        ratingSpinner.setSelection(existing == null ? 0 : existing.rating);
+        content.addView(ratingSpinner, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
         List<String> history = TagCatalog.allTags(records);
         ListView historyList = new ListView(this);
         if (!history.isEmpty()) {
@@ -701,7 +735,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         }
 
         AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("编辑视频标签")
+                .setTitle("编辑标签与评分")
                 .setView(content)
                 .setNegativeButton("取消", null)
                 .setPositiveButton("保存", null)
@@ -716,10 +750,14 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                     }
                     List<String> tags = TagCatalog.combineTags(
                             selected, newTagsInput.getText().toString());
+                    int rating = ratingSpinner.getSelectedItemPosition();
                     TaggedVideo updated = new TaggedVideo(current.key, current.title, current.path,
-                            current.shizuku, current.contentUri, tags);
+                            current.shizuku, current.contentUri, tags, rating);
                     saveTaggedVideos(TagCatalog.upsert(taggedVideos(), updated));
-                    Toast.makeText(this, tags.isEmpty() ? "已清除标签" : "标签已保存",
+                    updateCurrentMetadataDisplay();
+                    String message = tags.isEmpty() && rating == 0 ? "已清除标签和评分"
+                            : (tags.isEmpty() ? "评分已保存" : "标签与评分已保存");
+                    Toast.makeText(this, message,
                             Toast.LENGTH_SHORT).show();
                     dialog.dismiss();
                 }));
@@ -738,6 +776,44 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 .setItems(tags.toArray(new CharSequence[0]), (dialog, which) ->
                         showTaggedVideoList(tags.get(which),
                                 TagCatalog.videosForTag(records, tags.get(which))))
+                .setNegativeButton("关闭", null)
+                .show();
+    }
+
+    private void showRatingBrowser() {
+        List<TaggedVideo> records = taggedVideos();
+        List<Integer> ratings = TagCatalog.allRatings(records);
+        if (ratings.isEmpty()) {
+            Toast.makeText(this, "暂无评分", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        CharSequence[] labels = new CharSequence[ratings.size()];
+        for (int i = 0; i < ratings.size(); i++) {
+            labels[i] = "评分 " + ratings.get(i);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("评分浏览")
+                .setItems(labels, (dialog, which) -> showRatingTagBrowser(records, ratings.get(which)))
+                .setNegativeButton("关闭", null)
+                .show();
+    }
+
+    private void showRatingTagBrowser(List<TaggedVideo> records, int rating) {
+        List<String> tags = TagCatalog.tagsForRating(records, rating);
+        CharSequence[] labels = new CharSequence[tags.size() + 1];
+        labels[0] = "全部标签";
+        for (int i = 0; i < tags.size(); i++) {
+            labels[i + 1] = "#" + tags.get(i);
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("评分 " + rating + "：选择标签")
+                .setItems(labels, (dialog, which) -> {
+                    List<TaggedVideo> filtered = which == 0
+                            ? TagCatalog.videosForRating(records, rating)
+                            : TagCatalog.videosForRatingAndTag(records, rating, tags.get(which - 1));
+                    showTaggedVideoList("评分 " + rating
+                            + (which == 0 ? "" : "  #" + tags.get(which - 1)), filtered);
+                })
                 .setNegativeButton("关闭", null)
                 .show();
     }
@@ -767,10 +843,12 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private void showBrowseOptions() {
         new AlertDialog.Builder(this)
                 .setTitle("浏览")
-                .setItems(new CharSequence[]{"按标签浏览", "Shizuku 浏览", "系统浏览"}, (dialog, which) -> {
+                .setItems(new CharSequence[]{"按评分浏览", "按标签浏览", "Shizuku 浏览", "系统浏览"}, (dialog, which) -> {
                     if (which == 0) {
-                        showTagBrowser();
+                        showRatingBrowser();
                     } else if (which == 1) {
+                        showTagBrowser();
+                    } else if (which == 2) {
                         showShizukuPickOptions();
                     } else {
                         pickVideo();
@@ -892,34 +970,43 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     }
 
     private FavoriteItem currentFavoriteItem() {
+        FavoriteItem base;
         if (currentUri == null) {
             String raw = pathInput == null ? "" : pathInput.getText().toString().trim();
             if (raw.isEmpty()) {
                 return null;
             }
             if (raw.startsWith("content://")) {
-                return new FavoriteItem(raw, displayTitle(Uri.parse(raw)), raw, false, true);
+                base = new FavoriteItem(raw, displayTitle(Uri.parse(raw)), raw, false, true);
+            } else {
+                String path = raw.startsWith("file://") ? Uri.parse(raw).getPath() : raw;
+                base = new FavoriteItem("file:" + path, new File(path).getName(), path, false, false);
             }
-            return new FavoriteItem("file:" + raw, new File(raw).getName(), raw, false, false);
-        }
-        if ("shizuku".equals(currentUri.getScheme())) {
+        } else if ("shizuku".equals(currentUri.getScheme())) {
             String path = currentUri.getSchemeSpecificPart();
-            return new FavoriteItem("shizuku:" + path, new File(path).getName(), path, true, false);
-        }
-        if ("content".equals(currentUri.getScheme())) {
+            base = new FavoriteItem("shizuku:" + path, new File(path).getName(), path, true, false);
+        } else if ("content".equals(currentUri.getScheme())) {
             String uri = currentUri.toString();
-            return new FavoriteItem(uri, displayTitle(currentUri), uri, false, true);
-        }
-        if ("file".equals(currentUri.getScheme())) {
+            base = new FavoriteItem(uri, displayTitle(currentUri), uri, false, true);
+        } else if ("file".equals(currentUri.getScheme())) {
             String path = currentUri.getPath();
-            return new FavoriteItem("file:" + path, new File(path).getName(), path, false, false);
+            base = new FavoriteItem("file:" + path, new File(path).getName(), path, false, false);
+        } else {
+            String uri = currentUri.toString();
+            base = new FavoriteItem(uri, displayTitle(currentUri), uri, false, uri.startsWith("content://"));
         }
-        String uri = currentUri.toString();
-        return new FavoriteItem(uri, displayTitle(currentUri), uri, false, uri.startsWith("content://"));
+        for (TaggedVideo tagged : taggedVideos()) {
+            if (base.key.equals(tagged.key)) {
+                return new FavoriteItem(base.key, base.title, base.path, base.shizuku,
+                        base.contentUri, tagged.rating, tagged.tags);
+            }
+        }
+        return base;
     }
 
     private List<FavoriteItem> favoriteItems() {
         List<FavoriteItem> items = new ArrayList<>();
+        boolean removedMissingLocalFile = false;
         String raw = getPreferences().getString(KEY_FAVORITES, "[]");
         try {
             JSONArray array = new JSONArray(raw);
@@ -934,17 +1021,24 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 if (key.isEmpty() || path.isEmpty() || seen.contains(key)) {
                     continue;
                 }
+                boolean shizuku = object.optBoolean("shizuku", false);
+                boolean contentUri = object.optBoolean("contentUri", false);
+                if (!shizuku && !contentUri && isConfirmedMissingLocalFile(path)) {
+                    removedMissingLocalFile = true;
+                    continue;
+                }
                 seen.add(key);
                 String title = object.optString("title", "");
                 if (title.isEmpty()) {
                     title = new File(path).getName();
                 }
-                items.add(new FavoriteItem(key, title, path,
-                        object.optBoolean("shizuku", false),
-                        object.optBoolean("contentUri", false)));
+                items.add(new FavoriteItem(key, title, path, shizuku, contentUri));
             }
         } catch (Exception exception) {
             Log.w(TAG, "Failed to parse favorites", exception);
+        }
+        if (removedMissingLocalFile) {
+            saveFavoriteItems(items);
         }
         return items;
     }
@@ -974,6 +1068,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
 
     private List<TaggedVideo> taggedVideos() {
         List<TaggedVideo> records = new ArrayList<>();
+        boolean removedMissingLocalFile = false;
         String raw = getPreferences().getString(KEY_TAGGED_VIDEOS, "[]");
         try {
             JSONArray array = new JSONArray(raw);
@@ -989,12 +1084,19 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 if (key.isEmpty() || path.isEmpty() || tagArray == null || seen.contains(key)) {
                     continue;
                 }
+                boolean shizuku = object.optBoolean("shizuku", false);
+                boolean contentUri = object.optBoolean("contentUri", false);
+                if (!shizuku && !contentUri && isConfirmedMissingLocalFile(path)) {
+                    removedMissingLocalFile = true;
+                    continue;
+                }
                 List<String> tags = new ArrayList<>();
                 for (int tagIndex = 0; tagIndex < tagArray.length(); tagIndex++) {
                     tags.add(tagArray.optString(tagIndex, ""));
                 }
                 tags = TagCatalog.normalizeTags(tags);
-                if (tags.isEmpty()) {
+                int rating = object.optInt("rating", 0);
+                if (tags.isEmpty() && TagCatalog.normalizeRating(rating) == 0) {
                     continue;
                 }
                 seen.add(key);
@@ -1002,14 +1104,37 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 if (title.isEmpty()) {
                     title = new File(path).getName();
                 }
-                records.add(new TaggedVideo(key, title, path,
-                        object.optBoolean("shizuku", false),
-                        object.optBoolean("contentUri", false), tags));
+                records.add(new TaggedVideo(key, title, path, shizuku, contentUri, tags, rating));
             }
         } catch (Exception exception) {
             Log.w(TAG, "Failed to parse tagged videos", exception);
         }
-        return records;
+        List<TaggedVideo> migrated = TagCatalog.migrateNumericTags(records);
+        if (removedMissingLocalFile || !sameTaggedRecords(records, migrated)) {
+            saveTaggedVideos(migrated);
+        }
+        return migrated;
+    }
+
+    private boolean sameTaggedRecords(List<TaggedVideo> first, List<TaggedVideo> second) {
+        if (first.size() != second.size()) {
+            return false;
+        }
+        for (int i = 0; i < first.size(); i++) {
+            TaggedVideo left = first.get(i);
+            TaggedVideo right = second.get(i);
+            if (!left.key.equals(right.key) || left.rating != right.rating
+                    || !left.tags.equals(right.tags)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isConfirmedMissingLocalFile(String path) {
+        File file = new File(path);
+        File parent = file.getParentFile();
+        return parent != null && parent.canRead() && !file.isFile();
     }
 
     private void saveTaggedVideos(List<TaggedVideo> records) {
@@ -1017,7 +1142,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         Set<String> seen = new HashSet<>();
         for (TaggedVideo record : records) {
             if (record == null || record.key.isEmpty() || record.path.isEmpty()
-                    || record.tags.isEmpty() || seen.contains(record.key)) {
+                    || (record.tags.isEmpty() && record.rating == 0) || seen.contains(record.key)) {
                 continue;
             }
             seen.add(record.key);
@@ -1032,6 +1157,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 object.put("path", record.path);
                 object.put("shizuku", record.shizuku);
                 object.put("contentUri", record.contentUri);
+                object.put("rating", record.rating);
                 object.put("tags", tags);
                 array.put(object);
             } catch (Exception exception) {
@@ -1067,6 +1193,29 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         FavoriteItem item = currentFavoriteItem();
         boolean favorite = item != null && favoriteIndexOf(favoriteItems(), item.key) >= 0;
         favoriteButton.setText(favorite ? "★" : "☆");
+        updateCurrentMetadataDisplay();
+    }
+
+    private void updateCurrentMetadataDisplay() {
+        if (titleText == null) {
+            return;
+        }
+        Uri uri = currentUri;
+        if (uri == null) {
+            titleText.setText("Smooth Player");
+            return;
+        }
+        FavoriteItem current = currentFavoriteItem();
+        StringBuilder title = new StringBuilder(displayTitle(uri));
+        if (current != null) {
+            if (current.rating > 0) {
+                title.append("  · 评分 ").append(current.rating);
+            }
+            for (String tag : current.tags) {
+                title.append("  #").append(tag);
+            }
+        }
+        titleText.setText(title.toString());
     }
 
     private void removeFavoriteForPath(String path, boolean shizuku, boolean contentUri) {
@@ -1415,6 +1564,23 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         LinearLayout.LayoutParams filterParams = new LinearLayout.LayoutParams(0, dp(40), 1f);
         filterParams.leftMargin = dp(8);
         toolRow.addView(browserFilterButton, filterParams);
+
+        browserDeleteButton = makeButton("多选删除");
+        browserDeleteButton.setOnClickListener(view -> {
+            if (!browserMultiSelect) {
+                browserMultiSelect = true;
+                selectedBrowserPaths.clear();
+                refreshCurrentBrowserEntries();
+            } else if (selectedBrowserPaths.isEmpty()) {
+                browserMultiSelect = false;
+                refreshCurrentBrowserEntries();
+            } else {
+                confirmDeleteSelectedBrowserFiles();
+            }
+        });
+        LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(dp(92), dp(40));
+        deleteParams.leftMargin = dp(8);
+        toolRow.addView(browserDeleteButton, deleteParams);
         page.addView(toolRow, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT));
@@ -2237,10 +2403,46 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private void showShizukuDirectoryDialog(String path, String[] rawEntries, boolean sortBySize) {
         shizukuSortMode = sortBySize ? 1 : shizukuSortMode;
         saveLastShizukuDir(path);
+        pruneMissingShizukuMetadata(path, rawEntries);
         currentBrowserPath = path;
         currentBrowserRawEntries = rawEntries;
         showShizukuBrowser();
         refreshCurrentBrowserEntries();
+    }
+
+    private void pruneMissingShizukuMetadata(String directoryPath, String[] rawEntries) {
+        Set<String> availablePaths = new HashSet<>();
+        for (String rawEntry : rawEntries) {
+            RestrictedEntry entry = RestrictedEntry.parse(rawEntry);
+            if (entry != null) {
+                availablePaths.add(entry.path);
+            }
+        }
+
+        List<FavoriteItem> favorites = favoriteItems();
+        List<FavoriteItem> keptFavorites = new ArrayList<>();
+        for (FavoriteItem favorite : favorites) {
+            if (!favorite.shizuku || !directoryPath.equals(new File(favorite.path).getParent())
+                    || availablePaths.contains(favorite.path)) {
+                keptFavorites.add(favorite);
+            }
+        }
+        if (keptFavorites.size() != favorites.size()) {
+            saveFavoriteItems(keptFavorites);
+        }
+
+        List<TaggedVideo> tagged = taggedVideos();
+        List<TaggedVideo> keptTagged = new ArrayList<>();
+        for (TaggedVideo record : tagged) {
+            if (!record.shizuku || !directoryPath.equals(new File(record.path).getParent())
+                    || availablePaths.contains(record.path)) {
+                keptTagged.add(record);
+            }
+        }
+        if (keptTagged.size() != tagged.size()) {
+            saveTaggedVideos(keptTagged);
+        }
+        updateFavoriteButton();
     }
 
     private void refreshCurrentBrowserEntries() {
@@ -2266,11 +2468,25 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         entries.addAll(children);
         RestrictedEntryAdapter adapter = new RestrictedEntryAdapter(entries, generation);
         browserListView.setAdapter(adapter);
+        browserListView.setChoiceMode(browserMultiSelect
+                ? ListView.CHOICE_MODE_MULTIPLE : ListView.CHOICE_MODE_NONE);
         browserListView.setOnItemClickListener((parent, view, which, id) -> {
             RestrictedEntry entry = entries.get(which);
+            if (browserMultiSelect) {
+                if (!entry.directory) {
+                    if (selectedBrowserPaths.contains(entry.path)) {
+                        selectedBrowserPaths.remove(entry.path);
+                    } else {
+                        selectedBrowserPaths.add(entry.path);
+                    }
+                    refreshCurrentBrowserEntries();
+                }
+                return;
+            }
             if (entry.directory) {
                 showShizukuDirectory(entry.path);
             } else {
+                playbackOriginBrowserPath = currentBrowserPath;
                 hideShizukuBrowser();
                 openShizukuEntryFromDirectory(entries, entry);
             }
@@ -2278,6 +2494,9 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         browserListView.setOnItemLongClickListener((parent, view, which, id) -> {
             RestrictedEntry entry = entries.get(which);
             if (entry.directory) {
+                return false;
+            }
+            if (browserMultiSelect) {
                 return false;
             }
             showShizukuFileActions(currentBrowserPath, currentBrowserRawEntries, shizukuSortMode == 1,
@@ -2301,6 +2520,8 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
 
     private void hideShizukuBrowser() {
         browserVisible = false;
+        browserMultiSelect = false;
+        selectedBrowserPaths.clear();
         currentBrowserPath = null;
         currentBrowserRawEntries = null;
         if (shizukuBrowserOverlay != null) {
@@ -2324,6 +2545,84 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         if (browserFilterButton != null) {
             browserFilterButton.setText(videoOnlyBrowsing ? "仅视频" : "全部");
         }
+        if (browserDeleteButton != null) {
+            browserDeleteButton.setText(!browserMultiSelect ? "多选删除"
+                    : (selectedBrowserPaths.isEmpty() ? "退出多选" : "删除(" + selectedBrowserPaths.size() + ")"));
+        }
+    }
+
+    private void confirmDeleteSelectedBrowserFiles() {
+        final List<String> paths = new ArrayList<>(selectedBrowserPaths);
+        new AlertDialog.Builder(this)
+                .setTitle("批量删除")
+                .setMessage("确定删除选中的 " + paths.size() + " 个文件？")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("删除", (dialog, which) -> deleteSelectedBrowserFiles(paths))
+                .show();
+    }
+
+    private void deleteSelectedBrowserFiles(List<String> paths) {
+        ProgressDialog progressDialog = new ProgressDialog(this);
+        progressDialog.setMessage("正在批量删除");
+        progressDialog.setIndeterminate(true);
+        progressDialog.setCancelable(false);
+        progressDialog.show();
+        ioExecutor.execute(() -> {
+            int deletedCount = 0;
+            List<String> deletedPaths = new ArrayList<>();
+            try {
+                ensureShizukuServiceBound();
+                IRestrictedFileService service = restrictedFileService;
+                if (service == null) {
+                    throw new IOException("Shizuku service is not connected");
+                }
+                for (String path : paths) {
+                    if (service.deleteFile(path)) {
+                        deletedCount++;
+                        deletedPaths.add(path);
+                    }
+                }
+            } catch (IOException | RemoteException | InterruptedException exception) {
+                Log.w(TAG, "Batch Shizuku delete failed", exception);
+                if (exception instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            int result = deletedCount;
+            runOnUiThread(() -> {
+                progressDialog.dismiss();
+                boolean deletedCurrent = false;
+                for (String path : deletedPaths) {
+                    previewCache.remove(path);
+                    previewLoading.remove(path);
+                    removeFavoriteForPath(path, true, false);
+                    removeTaggedVideoForPath(path, true, false);
+                    removeFromPlaybackQueue(path, true, false);
+                    if (currentUri != null && "shizuku".equals(currentUri.getScheme())
+                            && path.equals(currentUri.getSchemeSpecificPart())) {
+                        deletedCurrent = true;
+                    }
+                }
+                if (deletedCurrent) {
+                    PlaybackItem fallback = currentQueueIndex >= 0
+                            && currentQueueIndex < playbackQueue.size()
+                            ? playbackQueue.get(currentQueueIndex) : null;
+                    releasePlayer();
+                    currentUri = null;
+                    if (fallback != null) {
+                        openPlaybackItem(fallback, true);
+                    } else {
+                        pathInput.setText("");
+                        titleText.setText("Smooth Player");
+                        resetPlaybackDisplay();
+                    }
+                }
+                selectedBrowserPaths.clear();
+                browserMultiSelect = false;
+                Toast.makeText(MainActivity.this, "已删除 " + result + " 个文件", Toast.LENGTH_SHORT).show();
+                showShizukuDirectory(currentBrowserPath);
+            });
+        });
     }
 
     private void showSortModeMenu() {
@@ -2366,6 +2665,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
                 .setItems(new CharSequence[]{"播放", "删除文件"}, (dialog, which) -> {
                     if (which == 0) {
                         dialog.dismiss();
+                        playbackOriginBrowserPath = directoryPath;
                         hideShizukuBrowser();
                         openShizukuEntryFromDirectory(entries, entry);
                     } else {
@@ -3768,7 +4068,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
             }
 
             RestrictedEntry entry = getItem(position);
-            holder.name.setText(entry.name);
+            holder.name.setText(selectedBrowserPaths.contains(entry.path) ? "✓ " + entry.name : entry.name);
             holder.meta.setText(entry.directory ? "目录" : entry.readableMeta());
             if (entry.directory) {
                 holder.preview.setImageBitmap(null);
@@ -3854,7 +4154,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
 
             FavoriteItem item = getItem(position);
             holder.name.setText(item.title);
-            holder.meta.setText(item.sourceLabel());
+            holder.meta.setText(item.metadataLabel());
             holder.preview.setBackgroundColor(Color.rgb(18, 24, 31));
             Bitmap cached = previewCache.get(item.previewKey());
             if (cached != null) {

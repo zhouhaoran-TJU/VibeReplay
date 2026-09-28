@@ -9,7 +9,7 @@ final class MoreOptions {
     }
 
     private static final String[] LABELS = {
-            "编辑当前视频标签", "检查更新", "文件访问权限", "删除当前视频"
+            "编辑标签与评分", "检查更新", "文件访问权限", "删除当前视频"
     };
 
     private MoreOptions() {
