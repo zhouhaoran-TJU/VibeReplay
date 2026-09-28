@@ -1,8 +1,8 @@
 {
-  "versionCode": 29,
-  "versionName": "3.8-beta",
+  "versionCode": 30,
+  "versionName": "3.9-beta",
   "apkUrl": "https://github.com/zhouhaoran-TJU/VibeReplay/raw/main/dist/SmoothPlayer-beta.apk",
-  "apkSize": 200871,
-  "sha256": "c395bb95c84d0c31374c0eaf80bf6227d8fb26a2ecda7d86976bae064dcf1a7a",
-  "notes": "支持为视频添加多个标签，可输入新标签或选择历史标签，并按标签浏览和连续播放。"
+  "apkSize": 205223,
+  "sha256": "74edc83be4955c3a2efc287393e4661391e3f1729140fd89531af0c36dfb0922",
+  "notes": "新增 1-10 分视频评分、评分与标签组合浏览、旧数字标签自动迁移；播放页显示并可编辑评分和标签；删除视频同步清理收藏与标签，Shizuku 目录支持返回恢复和多选删除。"
 }
